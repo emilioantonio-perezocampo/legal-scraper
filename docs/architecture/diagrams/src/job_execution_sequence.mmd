@@ -1,0 +1,23 @@
+sequenceDiagram
+    participant S as SchedulerActor
+    participant D as DofDiscoveryActor
+    participant W as DofScraperActor
+    participant P as PersistenceActor
+    
+    S->>D: tell("DISCOVER_TODAY")
+    activate D
+    D->>D: _scan_index(today)
+    loop For each Document
+        D->>W: tell({url, title})
+    end
+    deactivate D
+    
+    activate W
+    W->>W: fetch(url)
+    W->>W: parse(html)
+    W->>P: tell("SAVE_LAW", entity)
+    deactivate W
+    
+    activate P
+    P->>P: save_to_json(entity)
+    deactivate P

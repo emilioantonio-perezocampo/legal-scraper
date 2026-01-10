@@ -1,0 +1,23 @@
+@startjson
+{
+  "title": "LEY FEDERAL DEL TRABAJO",
+  "publication_date": "1970-04-01",
+  "jurisdiction": "FEDERAL",
+  "articles": [
+    {
+      "identifier": "Art. 1",
+      "content": "La presente Ley es de observancia general...",
+      "order": 1
+    },
+    {
+      "identifier": "Art. 2",
+      "content": "Las normas del trabajo tienden a conseguir...",
+      "order": 2
+    }
+  ],
+  "metadata": {
+    "scraped_at": "2023-10-27T10:00:00Z",
+    "source_url": "https://dof.gob.mx/..."
+  }
+}
+@endjson

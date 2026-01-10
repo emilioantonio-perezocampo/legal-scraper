@@ -1,0 +1,69 @@
+@startuml
+!theme plain
+
+package "src" {
+  
+  package "infrastructure" {
+    
+    package "actors" {
+      abstract class BaseActor {
+        + tell(msg)
+        + ask(msg)
+      }
+      
+      class SCJNCoordinatorActor {
+        - PipelineState _state
+        - deque _pending_queue
+        - int _active_downloads
+        + handle_message()
+      }
+      
+      class SCJNDiscoveryActor {
+        - ClientSession _session
+        - RateLimiter _rate_limiter
+        + _fetch_search_page()
+      }
+      
+      class SCJNScraperActor {
+        + _download_pdf()
+      }
+      
+      class SCJNPersistenceActor {
+        + _save_to_disk()
+      }
+      
+      class RateLimiter {
+        + acquire()
+      }
+      
+      class CheckpointActor {
+        + save_checkpoint()
+      }
+    }
+    
+    package "adapters" {
+      class "scjn_search_parser" as SearchParser {
+        + parse_search_results()
+        + extract_pagination_info()
+      }
+    }
+  }
+  
+  package "domain" {
+    class SCJNDocument
+  }
+}
+
+' Inheritance
+BaseActor <|-- SCJNCoordinatorActor
+BaseActor <|-- SCJNDiscoveryActor
+BaseActor <|-- SCJNScraperActor
+
+' Associations
+SCJNCoordinatorActor --> SCJNDiscoveryActor : manages
+SCJNCoordinatorActor --> SCJNScraperActor : manages
+SCJNCoordinatorActor --> RateLimiter : uses
+SCJNDiscoveryActor --> SearchParser : uses
+SCJNDiscoveryActor ..> SCJNDocument : yields q_param
+
+@enduml

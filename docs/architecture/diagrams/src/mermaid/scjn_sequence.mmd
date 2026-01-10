@@ -1,0 +1,37 @@
+sequenceDiagram
+    participant CLI as Main/CLI
+    participant Coord as SCJNCoordinatorActor
+    participant Disc as SCJNDiscoveryActor
+    participant Rate as RateLimiter
+    participant Scraper as SCJNScraperActor
+
+    CLI->>Coord: ask(DescubrirDocumentos)
+    Coord->>Disc: ask(DescubrirDocumentos)
+    
+    activate Disc
+    Disc->>Rate: acquire()
+    Rate-->>Disc: granted
+    Disc->>Disc: _fetch_search_page(page=1)
+    Disc->>Disc: parse_search_results()
+    
+    loop For each Result
+        Disc->>Coord: tell(DocumentoDescubierto)
+        Coord->>Coord: Deduplicate(q_param)
+        Coord->>Coord: Queue Download
+    end
+    
+    Disc-->>Coord: PaginaDescubierta(has_more=True)
+    deactivate Disc
+    
+    Coord->>Coord: State -> DOWNLOADING
+    
+    loop Until MaxConcurrency
+        Coord->>Scraper: tell(DescargarDocumento)
+        activate Scraper
+        Scraper->>Scraper: Download PDF
+        Scraper->>Coord: tell(DocumentoDescargado)
+        deactivate Scraper
+        Coord->>Coord: ActiveCount--
+    end
+    
+    Coord-->>CLI: Status Update (via ObtenerEstado)

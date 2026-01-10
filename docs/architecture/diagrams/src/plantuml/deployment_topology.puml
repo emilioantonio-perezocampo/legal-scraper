@@ -1,0 +1,26 @@
+@startuml
+!theme plain
+
+node "Docker Host" {
+  
+  node "Container: legal-scraper" {
+    component [Python Runtime]
+    folder "/app/scraped_data" as ContainerData
+  }
+  
+  folder "./scraped_data" as HostData
+  folder "./scjn_data" as HostSCJN
+  
+  [Python Runtime] --> ContainerData : Writes JSON
+  ContainerData <--> HostData : Volume Mount
+}
+
+cloud "Internet" {
+  [dof.gob.mx]
+  [scjn.gob.mx]
+}
+
+[Python Runtime] --> [dof.gob.mx] : HTTPS (443)
+[Python Runtime] --> [scjn.gob.mx] : HTTPS (443)
+
+@enduml

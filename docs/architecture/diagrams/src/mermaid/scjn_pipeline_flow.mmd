@@ -1,0 +1,29 @@
+flowchart TD
+    Start([Start Discovery]) --> RateLimit{RateLimiter.acquire}
+    RateLimit -->|Granted| Fetch[GET Search Page]
+    Fetch --> Parse[parse_search_results]
+    
+    Parse -->|Success| Extract{Extract Pagination}
+    Parse -->|ParseError| Error[Emit ErrorDeActor]
+    
+    Extract -->|Results Found| Emit[Emit DocumentoDescubierto]
+    Emit --> Dedup{In discovered_set?}
+    
+    Dedup -->|No| CheckDB{In Persistence?}
+    Dedup -->|Yes| Skip[Skip]
+    
+    CheckDB -->|No| Queue[Add to pending_queue]
+    CheckDB -->|Yes| Skip
+    
+    Queue --> Concurrency{Active < Max?}
+    Concurrency -->|Yes| Download[Trigger SCJNScraper]
+    Concurrency -->|No| Wait[Wait for Event]
+    
+    Download --> Save[Persistence.save]
+    Save --> Checkpoint{Interval Met?}
+    Checkpoint -->|Yes| SaveCP[Save Checkpoint]
+    Checkpoint -->|No| Loop
+    
+    Error --> Recover{Recoverable?}
+    Recover -->|Yes| RetryQueue
+    Recover -->|No| Fatal[Log & Stop]

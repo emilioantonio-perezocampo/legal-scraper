@@ -1,0 +1,18 @@
+# Caddyfile for Hetzner Deployment
+
+# 1. Replace 'YOUR_DOMAIN.com' with your actual domain or Public IP.
+#    If using an IP, automatic HTTPS might fail or use self-signed certs.
+YOUR_DOMAIN.com {
+    
+    # 2. Secure access with Basic Authentication
+    #    Default User: admin
+    #    Default Pass: password
+    #    IMPORTANT: Generate a new hash for your own password!
+    #    Run: docker run --rm caddy caddy hash-password --plaintext YOUR_NEW_PASSWORD
+    basicauth /* {
+        admin $2a$14$s.wT/xT2g.0/.. (replace this hash)
+    }
+
+    # 3. Reverse Proxy to the application container
+    reverse_proxy app:8000
+}

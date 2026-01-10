@@ -1,0 +1,24 @@
+erDiagram
+    FEDERAL_LAW ||--|{ ARTICLE : contains
+    FEDERAL_LAW {
+        string title
+        date publication_date
+        string jurisdiction
+        string url
+    }
+    ARTICLE {
+        string identifier
+        string content
+        int order
+    }
+    SESSION ||--|{ CHECKPOINT : has
+    SESSION {
+        string session_id
+        timestamp start_time
+        string status
+    }
+    CHECKPOINT {
+        int processed_count
+        string last_q_param
+        list failed_items
+    }

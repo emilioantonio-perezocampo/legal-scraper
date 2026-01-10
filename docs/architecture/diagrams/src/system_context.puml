@@ -1,0 +1,20 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+Person(user, "Legal Researcher", "Internal staff or Automated System")
+
+System(scraper_system, "Legal Scraper System", "Python/Asyncio", "Extracts, parses, and vectorizes legal documents.")
+
+System_Ext(dof_site, "Diario Oficial (DOF)", "Source of Federal Laws")
+System_Ext(scjn_site, "SCJN Portal", "Source of Case Law & State Laws")
+System_Ext(bjv_site, "Biblioteca Jurídica (BJV)", "Source of Doctrine")
+
+System_Ext(fs_storage, "Local File System", "JSON/PDF Storage")
+
+Rel(user, scraper_system, "Configures & Triggers Jobs", "GUI/CLI")
+Rel(scraper_system, dof_site, "Scrapes HTML", "HTTPS")
+Rel(scraper_system, scjn_site, "Scrapes HTML/PDF", "HTTPS")
+Rel(scraper_system, bjv_site, "Scrapes HTML", "HTTPS")
+Rel(scraper_system, fs_storage, "Persists Entities", "JSON Files")
+
+@enduml

@@ -1,0 +1,10 @@
+@startuml
+object "Scheduler : SchedulerActor" as S
+object "Discovery : DofDiscoveryActor" as D
+object "Worker 1 : DofScraperActor" as W1
+object "Persistence : PersistenceActor" as P
+
+S o-- D : manages
+D --> W1 : feeds
+W1 --> P : pipes result
+@enduml

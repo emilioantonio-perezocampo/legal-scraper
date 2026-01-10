@@ -1,0 +1,44 @@
+@startuml
+start
+:Run scjn_main.py;
+if (Command?) then (discover)
+  :Parse args;
+  :Create Coordinator;
+  :Create DiscoveryActor;
+  :Create ScraperActor;
+  
+  :Send DescubrirDocumentos msg;
+  
+  fork
+    :Discovery Loop;
+    note right: Finds URLs
+  fork again
+    :Scraper Loop;
+    note right: Downloads PDFs
+  end fork
+  
+  :Monitor Status Loop;
+  while (pending > 0?) is (yes)
+    :Print Progress;
+    :Sleep 3s;
+  endwhile (no)
+  
+  :Shutdown Pipeline;
+  
+elseif (status)
+  :List Checkpoints;
+  :Read JSON files;
+  :Print Session IDs;
+  
+elseif (resume)
+  :Load Checkpoint JSON;
+  :Restore Session Manager;
+  :Resume Scraping;
+  
+else (unknown)
+  :Print Help;
+  stop
+endif
+
+stop
+@enduml

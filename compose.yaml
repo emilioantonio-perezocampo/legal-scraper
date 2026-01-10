@@ -1,0 +1,29 @@
+services:
+  app:
+    build: .
+    image: legal-scraper:latest
+    container_name: legal-scraper
+    
+    # CRITICAL: These flags enable TUI (Textual) support
+    tty: true
+    stdin_open: true
+    
+    # Persistence: Map the local data folder to the container
+    volumes:
+      - ./scraped_data:/app/scraped_data
+      # Mount source code for live-reloading (optional, good for dev)
+      - ./src:/app/src
+      - ./tests:/app/tests
+      
+      # GUI Support (Linux/X11)
+      # Uncomment the next line if running on Linux with X11
+      # - /tmp/.X11-unix:/tmp/.X11-unix
+      
+    environment:
+      # GUI Support: Pass the DISPLAY variable
+      - DISPLAY=${DISPLAY:-:0}
+      - PYTHONUNBUFFERED=1
+
+    # Overridable command
+    # Run: "docker compose run --rm app python tests/container_smoke_test.py"
+    command: python src/main.py

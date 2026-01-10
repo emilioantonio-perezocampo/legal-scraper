@@ -1,0 +1,77 @@
+classDiagram
+    %% Base Value Objects
+    class DocumentCategory {
+        <<Enumeration>>
+        LEY
+        CODIGO
+        REGLAMENTO
+    }
+    class DocumentStatus {
+        <<Enumeration>>
+        VIGENTE
+        ABROGADA
+    }
+
+    %% SCJN Domain
+    class SCJNDocument {
+        +String id
+        +String q_param
+        +String title
+        +DocumentCategory category
+        +DocumentStatus status
+        +tuple~SCJNArticle~ articles
+        +tuple~SCJNReform~ reforms
+        +article_count() int
+    }
+    class SCJNArticle {
+        +String number
+        +String content
+        +tuple reform_dates
+    }
+    class SCJNReform {
+        +String id
+        +String publication_number
+        +String gazette_section
+        +String pdf_path
+    }
+
+    %% BJV Domain
+    class LibroBJV {
+        +IdentificadorLibro id
+        +String titulo
+        +tuple~Autor~ autores
+        +tuple~CapituloLibro~ capitulos
+        +URLArchivo url_pdf
+    }
+    class Autor {
+        +String nombre
+        +String afiliacion
+    }
+    class CapituloLibro {
+        +int numero
+        +int pagina_inicio
+        +int pagina_fin
+    }
+
+    %% CAS Domain
+    class LaudoArbitral {
+        +String id
+        +NumeroCaso numero_caso
+        +FechaLaudo fecha
+        +tuple~Parte~ partes
+        +tuple~Arbitro~ arbitros
+    }
+    class Parte {
+        +String nombre
+        +TipoParte tipo
+    }
+
+    %% Relationships
+    SCJNDocument *-- SCJNArticle : contains
+    SCJNDocument *-- SCJNReform : history
+    SCJNDocument ..> DocumentCategory : uses
+    
+    LibroBJV *-- Autor : written by
+    LibroBJV *-- CapituloLibro : consists of
+    
+    LaudoArbitral *-- Parte : involves

@@ -1,0 +1,24 @@
+C4Context
+  title System Context Diagram - Legal Scraper
+
+  Person(user, "CLI Operator", "Runs scripts via terminal")
+  
+  System_Boundary(legal_scraper, "Legal Scraper System") {
+    System(dof_cli, "DOF Scraper", "src/main.py")
+    System(scjn_cli, "SCJN Scraper", "src/scjn_main.py")
+    System(bjv_cli, "BJV Scraper", "src/bjv_main.py")
+    System(cas_cli, "CAS Scraper", "src/cas_main.py")
+  }
+
+  System_Ext(dof_site, "DOF Website", "dof.gob.mx")
+  System_Ext(scjn_site, "SCJN Portal", "scjn.gob.mx")
+  System_Ext(bjv_site, "BJV UNAM", "juridicas.unam.mx")
+
+  Rel(user, dof_cli, "Runs", "python src/main.py")
+  Rel(user, scjn_cli, "Runs", "discover/status")
+  
+  Rel(dof_cli, dof_site, "Scrapes HTML", "aiohttp")
+  Rel(scjn_cli, scjn_site, "Downloads PDF/Text", "aiohttp")
+  Rel(bjv_cli, bjv_site, "Crawls Books", "aiohttp")
+
+  Rel(dof_cli, user, "Logs progress", "stdout")

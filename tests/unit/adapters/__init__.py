@@ -1,0 +1,1 @@
+# SCJN Adapter Tests Package

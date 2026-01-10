@@ -1,0 +1,39 @@
+services:
+  app:
+    build: .
+    image: legal-scraper:latest
+    container_name: legal-scraper
+    restart: always
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Timezone is often useful for logs/scheduling
+      - TZ=America/Mexico_City
+    volumes:
+      # Persist data folders
+      - ./scraped_data:/app/scraped_data
+      - ./scjn_data:/app/scjn_data
+      - ./bjv_data:/app/bjv_data
+      - ./checkpoints:/app/checkpoints
+    # Run the Web GUI
+    command: python src/gui/launcher.py --mode web --host 0.0.0.0 --port 8000
+    # Expose port 8000 only to the internal network (Caddy will access it)
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:latest
+    container_name: caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:

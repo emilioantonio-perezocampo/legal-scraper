@@ -1,0 +1,28 @@
+# Version Control
+.git
+.gitignore
+
+# Python/Conda Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.env
+env/
+venv/
+*.egg-info/
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Project Specific Data (Mounted via Volumes instead)
+scraped_data/
+checkpoints/
+scjn_data/
+_scratch/
+
+# IDE Settings
+.vscode/
+.idea/
+.claude/
+.gemini/

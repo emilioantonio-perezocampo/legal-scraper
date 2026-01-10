@@ -1,0 +1,25 @@
+stateDiagram-v2
+    [*] --> IDLE
+    
+    IDLE --> PROCESSING : Message Received
+    
+    state PROCESSING {
+        [*] --> ANALYZE_MSG
+        
+        ANALYZE_MSG --> FETCHING : Valid URL
+        ANALYZE_MSG --> IDLE : Invalid/Ignore
+        
+        FETCHING --> PARSING : HTTP 200 OK
+        FETCHING --> ERROR : HTTP 4xx/5xx
+        
+        PARSING --> SAVING : Entities Extracted
+        PARSING --> ERROR : Parse Exception
+        
+        SAVING --> NOTIFYING : Sent to Persistence
+        
+        NOTIFYING --> [*]
+        ERROR --> [*]
+    }
+    
+    PROCESSING --> IDLE : Task Complete
+    IDLE --> [*] : Poison Pill (Stop)

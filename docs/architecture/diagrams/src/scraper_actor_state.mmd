@@ -1,0 +1,9 @@
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Discovery : Job Started
+    Discovery --> Scraping : URL Found
+    Scraping --> Parsing : HTML Fetched
+    Parsing --> Saving : Data Extracted
+    Saving --> Idle : Saved
+    Scraping --> Error : 404/500
+    Error --> Idle : Retry/Fail

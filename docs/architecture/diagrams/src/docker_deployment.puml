@@ -1,0 +1,12 @@
+@startuml
+node "Host Server" {
+  component "Docker Daemon"
+  
+  node "Container: legal-scraper" {
+    [Python 3.10 Runtime]
+    folder "/app/data" as Data
+  }
+}
+
+[Python 3.10 Runtime] --> Data : Read/Write
+@enduml

@@ -1,0 +1,36 @@
+stateDiagram-v2
+    [*] --> IDLE
+    
+    IDLE --> DISCOVERING : DescubrirDocumentos
+    
+    state DISCOVERING {
+        [*] --> FetchingPage
+        FetchingPage --> ParsingResults
+        ParsingResults --> FetchingPage : HasMorePages
+        ParsingResults --> [*] : Done
+    }
+    
+    DISCOVERING --> DOWNLOADING : PendingQueue > 0
+    DISCOVERING --> IDLE : No Results
+    
+    state DOWNLOADING {
+        [*] --> CheckConcurrency
+        CheckConcurrency --> RequestDownload : Active < Limit
+        RequestDownload --> Waiting : Async Task
+        Waiting --> CheckConcurrency : DocumentoDescargado
+    }
+    
+    DOWNLOADING --> PAUSED : PausarPipeline
+    PAUSED --> IDLE : Stop
+    PAUSED --> DOWNLOADING : ReanudarPipeline
+    
+    DOWNLOADING --> IDLE : Queue Empty & Active=0
+    
+    state ERROR {
+        [*] --> LogError
+        LogError --> Retry : Recoverable
+        LogError --> Fatal : Non-Recoverable
+    }
+    
+    DISCOVERING --> ERROR : ParseError
+    DOWNLOADING --> ERROR : NetworkTimeout

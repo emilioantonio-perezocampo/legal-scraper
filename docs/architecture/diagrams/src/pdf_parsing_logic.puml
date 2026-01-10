@@ -1,0 +1,15 @@
+@startuml
+start
+:Receive PDF Bytes;
+if (Extract Text via PyPDF2?) then (yes)
+  :Text Content Found;
+else (no - empty/scanned)
+  :Initialize OCR (Tesseract);
+  :Convert PDF to Images;
+  :Perform OCR on Images;
+  :Text Content Found;
+endif
+:Clean & Normalize Text;
+:Split into Articles;
+stop
+@enduml

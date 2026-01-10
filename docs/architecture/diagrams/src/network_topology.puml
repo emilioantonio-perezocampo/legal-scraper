@@ -1,0 +1,26 @@
+@startuml
+nwdiag {
+  network Internet {
+    address = "0.0.0.0/0"
+    
+    DOF_Site [description="dof.gob.mx", shape = cloud];
+    SCJN_Site [description="scjn.gob.mx", shape = cloud];
+    BJV_Site [description="unam.mx", shape = cloud];
+  }
+
+  network Docker_Internal {
+    address = "172.17.0.x/16"
+    
+    Scraper_Container [address = "172.17.0.2", description = "Python Scraper"];
+  }
+  
+  group {
+    description = "External Targets";
+    DOF_Site;
+    SCJN_Site;
+    BJV_Site;
+  }
+  
+  Scraper_Container -- Internet;
+}
+@enduml

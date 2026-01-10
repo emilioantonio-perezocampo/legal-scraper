@@ -1,0 +1,13 @@
+requirementDiagram
+    requirement test_req {
+    id: 1
+    text: the test coverage should be at least 80%
+    risk: high
+    verifymethod: test
+    }
+
+    element test_suite {
+    type: simulation
+    }
+
+    test_suite - satisfies -> test_req

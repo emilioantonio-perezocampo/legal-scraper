@@ -1,0 +1,20 @@
+@startjson
+#highlight "articles"
+{
+  "title": "LEY FEDERAL DEL TRABAJO",
+  "publication_date": "2021-03-01",
+  "jurisdiction": "FEDERAL",
+  "articles": [
+    {
+      "identifier": "Articulo 1",
+      "content": "La presente Ley es de observancia general...",
+      "order": 1
+    },
+    {
+      "identifier": "Articulo 2",
+      "content": "Las normas del trabajo tienden a...",
+      "order": 2
+    }
+  ]
+}
+@endjson

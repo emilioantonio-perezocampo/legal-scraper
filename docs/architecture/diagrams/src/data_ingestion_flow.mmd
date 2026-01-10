@@ -1,0 +1,20 @@
+flowchart TD
+    Start([Start Job]) --> Discovery
+    
+    subgraph Discovery Phase
+        Discovery[DofDiscoveryActor] -->|Find URLs| Queue[(Job Queue)]
+    end
+    
+    subgraph Scrape Phase
+        Queue --> Worker[DofScraperActor]
+        Worker -->|Fetch| HTTP[dof.gob.mx]
+        HTTP -->|HTML| Worker
+        Worker -->|Parse| Entity[FederalLaw Entity]
+    end
+    
+    subgraph Persistence Phase
+        Entity --> Storage[PersistenceActor]
+        Storage -->|Save| JSON[(data/*.json)]
+    end
+    
+    Storage --> End([Job Complete])

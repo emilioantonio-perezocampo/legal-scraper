@@ -1,0 +1,13 @@
+@startwbs
+* SCJN Extension Project
+** Phase 1: Discovery
+*** Analyze Website
+*** Define Entities
+** Phase 2: Implementation
+*** Create Scraper Actor
+*** Create PDF Processor
+*** Create Embedding Actor
+** Phase 3: Validation
+*** Unit Tests
+*** Integration Tests
+@endwbs

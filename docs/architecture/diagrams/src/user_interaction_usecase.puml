@@ -1,0 +1,18 @@
+@startuml
+left to right direction
+actor "Researcher" as User
+actor "Scheduler" as Auto
+
+rectangle "Legal Scraper" {
+  usecase "Start Scrape Job" as UC1
+  usecase "Pause/Resume" as UC2
+  usecase "View Logs" as UC3
+  usecase "Export JSON" as UC4
+}
+
+User --> UC1
+User --> UC2
+User --> UC3
+Auto --> UC1 : "Daily Cron"
+UC1 ..> UC4 : "Result"
+@enduml

@@ -1,0 +1,31 @@
+@startuml
+robust "Scraper Worker" as Worker
+robust "Target Server" as Server
+
+scale 100 as 50 pixels
+
+@0
+Worker is Idle
+Server is Idle
+
+@1
+Worker is Requesting
+Server is Processing : HTTP GET /index
+
+@2
+Worker is Waiting
+Server is Sending : 200 OK
+
+@3
+Worker is Parsing
+Server is Idle
+
+@4
+Worker is "Cooling Down"
+Server is Idle
+
+@6
+Worker is Requesting : Next URL
+Server is Processing
+
+@enduml

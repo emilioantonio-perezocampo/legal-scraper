@@ -1,0 +1,17 @@
+{
+    "title": "Ley Federal del Trabajo",
+    "publication_date": "1970-04-01",
+    "jurisdiction": "Federal",
+    "articles": [
+        {
+            "identifier": "Art. 1",
+            "content": "Work is a right...",
+            "order": 1
+        },
+        {
+            "identifier": "Art. 2",
+            "content": "Social justice...",
+            "order": 2
+        }
+    ]
+}

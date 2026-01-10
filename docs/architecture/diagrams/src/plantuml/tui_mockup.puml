@@ -1,0 +1,26 @@
+@startsalt
+{
+  {/ 
+    <b>Legal Scraper TUI</b> | [X]
+  }
+  {+
+    [Discover] | [Scrape] | [Status] | [Config]
+  }
+  {
+    .
+    [X] DOF  | [ ] SCJN | [ ] BJV
+    .
+    Search Query: "Ley Federal..."
+    Max Results:  [ 100 ]
+  }
+  {T
+    + Log Output
+    ++ [INFO] Starting discovery...
+    ++ [INFO] Found 15 documents.
+    ++ [OK] Saved: Ley_Federal_Trabajo.json
+  }
+  {
+    [ Start ] | [ Stop ]
+  }
+}
+@endsalt

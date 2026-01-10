@@ -1,0 +1,21 @@
+name: legal-scraper
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytest
+  - pytest-asyncio
+  - pytest-cov
+  - pip
+  - aiohttp          # NEW: Async HTTP client
+  - beautifulsoup4   # NEW: HTML Parser
+  - lxml             # NEW: Faster parser engine
+  - tk               # GUI: Tkinter for local GUI support
+  # Web GUI dependencies
+  - fastapi          # Web framework for REST API
+  - uvicorn          # ASGI server for FastAPI
+  - jinja2           # Template engine for HTML pages
+  # Terminal TUI dependencies
+  - textual          # Modern terminal UI framework
+  - rich             # Rich text and formatting for terminal

@@ -1,0 +1,18 @@
+@startuml
+package "src.domain" {
+  class FederalLaw {
+    + title: str
+    + publication_date: date
+    + jurisdiction: str
+    + articles: List[Article]
+  }
+  
+  class Article {
+    + identifier: str
+    + content: str
+    + order: int
+  }
+  
+  FederalLaw "1" *-- "0..*" Article
+}
+@enduml

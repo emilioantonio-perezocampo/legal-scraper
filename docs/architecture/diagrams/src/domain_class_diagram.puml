@@ -1,0 +1,206 @@
+@startuml
+!theme plain
+hide empty members
+
+' --- DOMAIN LAYER (CORE) ---
+package "src.domain" {
+    
+    note "Legacy Mutable Entity" as N1
+    class FederalLaw {
+        + title: str
+        + publication_date: date
+        + jurisdiction: str
+        + articles: List[Article]
+    }
+    FederalLaw .. N1
+
+    class Article {
+        + identifier: str
+        + content: str
+        + order: int
+    }
+
+    note "New Immutable Entity (Frozen)" as N2
+    class SCJNDocument <<frozen>> {
+        + id: str
+        + q_param: str
+        + title: str
+        + short_title: str
+        + category: DocumentCategory
+        + scope: DocumentScope
+        + status: DocumentStatus
+        + publication_date: Optional[date]
+        + expedition_date: Optional[date]
+        + state: Optional[str]
+        + subject_matters: tuple
+        + articles: tuple[SCJNArticle]
+        + reforms: tuple[SCJNReform]
+        + source_url: str
+        --
+        + article_count: int
+        + reform_count: int
+    }
+    SCJNDocument .. N2
+
+    class SCJNReform <<frozen>> {
+        + id: str
+        + q_param: str
+        + publication_date: Optional[date]
+        + publication_number: str
+        + gazette_section: str
+        + text_content: Optional[str]
+        + pdf_path: Optional[str]
+    }
+
+    class SCJNArticle <<frozen>> {
+        + number: str
+        + title: str
+        + content: str
+        + reform_dates: tuple
+    }
+
+    class TextChunk <<frozen>> {
+        + id: str
+        + document_id: str
+        + content: str
+        + token_count: int
+        + chunk_index: int
+        + metadata: tuple
+    }
+
+    class DocumentEmbedding <<frozen>> {
+        + chunk_id: str
+        + vector: tuple
+        + model_name: str
+    }
+    
+    class ScrapingCheckpoint <<frozen>> {
+        + session_id: str
+        + last_processed_q_param: str
+        + processed_count: int
+        + failed_q_params: tuple
+        + created_at: datetime
+    }
+
+    enum DocumentCategory {
+        CONSTITUCION
+        LEY
+        CODIGO
+        DECRETO
+        REGLAMENTO
+        ACUERDO
+        TRATADO
+        CONVENIO
+    }
+
+    enum DocumentScope {
+        FEDERAL
+        ESTATAL
+        CDMX
+        INTERNACIONAL
+        EXTRANJERA
+    }
+
+    enum DocumentStatus {
+        VIGENTE
+        ABROGADA
+        DEROGADA
+        SUSTITUIDA
+        EXTINTA
+    }
+}
+
+' --- GUI DOMAIN LAYER ---
+package "src.gui.domain" {
+    class ScraperConfiguration <<frozen>> {
+        + target_source: TargetSource
+        + mode: ScraperMode
+        + output_format: OutputFormat
+        + output_directory: str
+        + date_range: Optional[DateRange]
+        + rate_limit_seconds: float
+        + single_date: Optional[date]
+    }
+
+    class ScraperJob <<frozen>> {
+        + configuration: ScraperConfiguration
+        + id: str
+        + status: JobStatus
+        + progress: Optional[JobProgress]
+        + logs: tuple
+        + started_at: Optional[datetime]
+        + completed_at: Optional[datetime]
+        + error_message: Optional[str]
+        --
+        + start(): ScraperJob
+        + pause(): ScraperJob
+        + resume(): ScraperJob
+        + complete(): ScraperJob
+        + fail(msg: str): ScraperJob
+        + cancel(): ScraperJob
+        + add_log(level, msg, src): ScraperJob
+        + update_progress(prog): ScraperJob
+    }
+    
+    class JobProgress <<frozen>> {
+        + total_items: int
+        + processed_items: int
+        + successful_items: int
+        + failed_items: int
+        + percentage: float
+        --
+        + increment_success(): JobProgress
+        + increment_failure(): JobProgress
+    }
+    
+    class DateRange <<frozen>> {
+        + start: date
+        + end: date
+        + days_count: int
+    }
+
+    enum TargetSource {
+        DOF
+        SCJN
+        BJV
+        CAS
+    }
+
+    enum ScraperMode {
+        TODAY
+        SINGLE_DATE
+        DATE_RANGE
+        HISTORICAL
+    }
+    
+    enum JobStatus {
+        IDLE
+        QUEUED
+        RUNNING
+        PAUSED
+        COMPLETED
+        FAILED
+        CANCELLED
+    }
+}
+
+' --- RELATIONSHIPS ---
+FederalLaw "1" *-- "0..*" Article : contains >
+
+SCJNDocument "1" *-- "0..*" SCJNArticle : contains >
+SCJNDocument "1" *-- "0..*" SCJNReform : history >
+SCJNDocument --> DocumentCategory
+SCJNDocument --> DocumentScope
+SCJNDocument --> DocumentStatus
+
+TextChunk "1" .. "1" DocumentEmbedding : mapped to >
+TextChunk --> SCJNDocument : derived from >
+
+ScraperJob --> ScraperConfiguration
+ScraperJob --> JobProgress
+ScraperJob --> JobStatus
+ScraperConfiguration --> TargetSource
+ScraperConfiguration --> ScraperMode
+ScraperConfiguration --> DateRange
+
+@enduml

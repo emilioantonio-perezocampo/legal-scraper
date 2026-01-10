@@ -1,0 +1,37 @@
+{
+  "general": {
+    "previewFeatures": true
+  },
+  "modelConfigs": {
+    "customAliases": {
+      "ultra-docs-g3": {
+        "extends": "chat-base",
+        "modelConfig": {
+          "model": "gemini-3-pro",
+          "generateContentConfig": {
+            "temperature": 0.2,
+            "topP": 1.0,
+            "maxOutputTokens": 65536,
+            "thinkingConfig": {
+              "thinkingLevel": "high"
+            }
+          }
+        }
+      },
+      "ultra-docs-25": {
+        "extends": "chat-base",
+        "modelConfig": {
+          "model": "gemini-2.5-pro",
+          "generateContentConfig": {
+            "temperature": 0.2,
+            "topP": 1.0,
+            "maxOutputTokens": 65536,
+            "thinkingConfig": {
+              "thinkingBudget": 24576
+            }
+          }
+        }
+      }
+    }
+  }
+}

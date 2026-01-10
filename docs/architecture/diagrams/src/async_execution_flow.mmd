@@ -1,0 +1,53 @@
+sequenceDiagram
+    autonumber
+    participant User
+    participant View as MainWindow
+    participant App as GuiApplication
+    participant Svc as ScraperService
+    participant UC as StartScrapingUseCase
+    participant Ctrl as GuiControllerActor
+    participant Bridge as GuiBridgeActor
+    participant Disc as DofDiscoveryActor
+    participant Scrape as DofScraperActor
+
+    User->>View: Click "Start"
+    View->>App: _handle_start(config_dict)
+    
+    rect rgb(240, 248, 255)
+        Note right of App: Async Boundary
+        App->>Svc: await start_scraping(config)
+        Svc->>UC: await execute(config)
+        
+        UC->>Ctrl: await ask("START_JOB", config)
+        
+        alt Job Already Running
+            Ctrl-->>UC: {success: False, error: "Running"}
+            UC-->>Svc: StartScrapingResult(False)
+            Svc-->>App: Result(False)
+            App-->>View: Show Error Dialog
+        else Success
+            Ctrl->>Bridge: tell("START_SCRAPE", config)
+            Ctrl-->>UC: {success: True, job_id: "..."}
+            UC-->>Svc: StartScrapingResult(True)
+            Svc-->>App: Result(True)
+            App-->>View: Update UI (Status: Running)
+        end
+    end
+
+    par Async Actor Execution
+        Bridge->>Disc: tell("DISCOVER_TODAY")
+        
+        Note over Disc: Discovery Loop
+        Disc->>Disc: _scan_index(today)
+        
+        alt Network Error
+            Disc->>Disc: Log Error & Retry
+        else Found Documents
+            Disc-->>Scrape: tell({url, title})
+        end
+        
+        Note over Scrape: Worker Loop
+        Scrape->>Scrape: fetch(url)
+        Scrape->>Scrape: parse(html)
+        Scrape-->>PersistenceActor: tell("SAVE_LAW", law)
+    end

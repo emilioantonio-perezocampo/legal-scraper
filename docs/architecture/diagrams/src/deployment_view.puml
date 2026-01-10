@@ -1,0 +1,11 @@
+@startuml
+node "Host" {
+  [GUI]
+  node "Docker" {
+    [Scraper]
+    database "Data"
+  }
+}
+[GUI] --> [Scraper]
+[Scraper] --> [Data]
+@enduml

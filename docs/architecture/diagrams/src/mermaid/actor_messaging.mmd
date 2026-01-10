@@ -1,0 +1,31 @@
+sequenceDiagram
+    participant S as Sender (Discovery)
+    participant A as BaseActor (Scraper)
+    participant Q as asyncio.Queue
+    participant ProcLoop as _process_mailbox
+
+    Note over S, ProcLoop: Asynchronous "Tell" Pattern
+
+    S->>A: tell(message)
+    A->>Q: put(message)
+    
+    par Internal Loop
+        ProcLoop->>Q: get()
+        Q-->>ProcLoop: item
+        ProcLoop->>A: handle_message(item)
+    end
+
+    Note over S, ProcLoop: Request-Response "Ask" Pattern
+
+    S->>A: ask(message)
+    create participant F as Future
+    A->>F: create_future()
+    A->>Q: put((message, future))
+    S->>F: await future
+    
+    ProcLoop->>Q: get()
+    Q-->>ProcLoop: (message, future)
+    ProcLoop->>A: handle_message(message)
+    A-->>ProcLoop: result
+    ProcLoop->>F: set_result(result)
+    F-->>S: return result

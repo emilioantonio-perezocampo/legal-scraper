@@ -1,0 +1,16 @@
+flowchart TD
+    A[main.py] -->|Start| B(SchedulerActor)
+    A -->|Trigger| C(DofDiscoveryActor)
+    
+    subgraph Pipeline
+    C -->|DISCOVER_RANGE| D{Check Date Range}
+    D -->|Found URL| E(DofScraperActor)
+    E -->|GET URL| F[dof.gob.mx]
+    F -->|HTML| E
+    E -->|Parse| G(dof_parser)
+    G -->|FederalLaw Obj| E
+    E -->|SAVE_LAW| H(PersistenceActor)
+    end
+    
+    H -->|Sanitize Title| I[re.sub]
+    I -->|Write JSON| J[(scraped_data/)]

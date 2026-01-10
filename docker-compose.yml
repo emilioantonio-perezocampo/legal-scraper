@@ -1,0 +1,17 @@
+services:
+  scraper:
+    build: .
+    image: legal-scraper:latest
+    container_name: legal-scraper
+    restart: always  # Auto-restart if it crashes or server reboots
+    volumes:
+      # Map the 'data' folder inside the container to a folder on the host
+      # This ensures your JSON files persist even if the container is deleted
+      - ./scraped_data:/app/data
+    environment:
+      - TZ=America/Mexico_City  # Set timezone for correct scheduling
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

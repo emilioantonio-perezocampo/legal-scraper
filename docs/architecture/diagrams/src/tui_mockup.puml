@@ -1,0 +1,17 @@
+@startsalt
+{
+  {/ <b>Legal Scraper TUI</b> | [X] }
+  {
+    <b>Configuration</b>
+    [X] Source: DOF | [ ] Source: SCJN
+    Date: "2023-10-27"
+    [ Start Scraping ]
+  }
+  {
+    <b>Live Logs</b>
+    [INFO] Discovery started...
+    [INFO] Found 15 docs
+    [SUCCESS] Scraped: Ley Federal del Trabajo
+  }
+}
+@endsalt
