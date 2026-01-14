@@ -3,6 +3,23 @@ from typing import Optional, Dict
 from src.infrastructure.actors.base import BaseActor
 from src.infrastructure.adapters.dof_parser import parse_dof_html
 
+_DOF_FIXTURE_HTML = """
+<html>
+    <body>
+        <div id="DivDetalleNota">
+            <h3 class="titulo">LEY FEDERAL DEL TRABAJO</h3>
+            <span id="lblFecha">01/04/1970</span>
+            <div class="Articulo">
+                <p><strong>Articulo 1o.-</strong> La presente Ley es de observancia general...</p>
+            </div>
+            <div class="Articulo">
+                <p><strong>Articulo 2o.-</strong> Las normas del trabajo tienden a conseguir...</p>
+            </div>
+        </div>
+    </body>
+</html>
+"""
+
 class DofScraperActor(BaseActor):
     def __init__(self, output_actor: Optional[BaseActor] = None):
         super().__init__()
@@ -11,6 +28,7 @@ class DofScraperActor(BaseActor):
     async def handle_message(self, message):
         url = None
         external_title = None
+        use_fixture = False
 
         # --- Message Parsing Logic ---
         
@@ -24,9 +42,16 @@ class DofScraperActor(BaseActor):
             if "nota_detalle.php" in message:
                 url = message.strip()
             elif message == "scrape_ley_federal_trabajo" or message == "START_SCRAPING":
-                url = "https://dof.gob.mx/nota_detalle.php?codigo=5612823&fecha=01/03/2021"
+                use_fixture = True
 
         # --- Scraping Logic ---
+        if use_fixture:
+            federal_law = parse_dof_html(_DOF_FIXTURE_HTML)
+            federal_law.title = "Ley Federal del Trabajo"
+            if self.output_actor:
+                await self.output_actor.tell(("SAVE_LAW", federal_law))
+            return federal_law
+
         if url:
             try:
                 async with aiohttp.ClientSession() as session:

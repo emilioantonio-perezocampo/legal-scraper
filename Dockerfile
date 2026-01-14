@@ -9,17 +9,27 @@ FROM mambaorg/micromamba:1.5-jammy
 # Switch to root to install system libraries required for Tkinter and X11
 USER root
 
+# Prevent tzdata prompts during apt installs
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+
 # Install Tkinter system dependencies + X11 libraries
 # python3-tk: The actual binding
 # libx11-6, libxext6: Core X11 libs
 # libxrender1, libxtst6: Common GUI rendering deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    tzdata \
+    unzip \
     python3-tk \
     libx11-6 \
     libxext6 \
     libxrender1 \
     libxtst6 \
     tk-dev \
+    nodejs \
+    npm \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
@@ -51,6 +61,7 @@ WORKDIR /app
 COPY --chown=mambauser:mambauser src/ src/
 COPY --chown=mambauser:mambauser tests/ tests/
 COPY --chown=mambauser:mambauser GEMINI.md .
+COPY --chown=mambauser:mambauser reflex_ui/ reflex_ui/
 
 # Default command: Launch the CLI/TUI entry point
 # "python -u" forces unbuffered stdout, essential for Docker logs

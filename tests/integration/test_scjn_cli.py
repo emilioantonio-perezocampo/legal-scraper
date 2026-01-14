@@ -17,6 +17,7 @@ class TestCLIArgumentParsing:
         """Discover command should have sensible defaults."""
         with patch.object(sys, 'argv', ['scjn_main', 'discover', '--max-results', '5']):
             with patch('src.scjn_main.asyncio.run') as mock_run:
+                mock_run.side_effect = lambda coro: coro.close()
                 main()
                 mock_run.assert_called_once()
                 args = mock_run.call_args[0][0]
@@ -26,6 +27,7 @@ class TestCLIArgumentParsing:
         """Discover should accept category filter."""
         with patch.object(sys, 'argv', ['scjn_main', 'discover', '--category', 'LEY']):
             with patch('src.scjn_main.asyncio.run') as mock_run:
+                mock_run.side_effect = lambda coro: coro.close()
                 main()
                 mock_run.assert_called_once()
 
@@ -33,6 +35,7 @@ class TestCLIArgumentParsing:
         """Discover should accept scope filter."""
         with patch.object(sys, 'argv', ['scjn_main', 'discover', '--scope', 'FEDERAL']):
             with patch('src.scjn_main.asyncio.run') as mock_run:
+                mock_run.side_effect = lambda coro: coro.close()
                 main()
                 mock_run.assert_called_once()
 
@@ -40,6 +43,7 @@ class TestCLIArgumentParsing:
         """Discover should accept rate limit."""
         with patch.object(sys, 'argv', ['scjn_main', 'discover', '--rate-limit', '0.2']):
             with patch('src.scjn_main.asyncio.run') as mock_run:
+                mock_run.side_effect = lambda coro: coro.close()
                 main()
                 mock_run.assert_called_once()
 
@@ -47,6 +51,7 @@ class TestCLIArgumentParsing:
         """Discover should accept concurrency setting."""
         with patch.object(sys, 'argv', ['scjn_main', 'discover', '--concurrency', '5']):
             with patch('src.scjn_main.asyncio.run') as mock_run:
+                mock_run.side_effect = lambda coro: coro.close()
                 main()
                 mock_run.assert_called_once()
 
@@ -54,6 +59,7 @@ class TestCLIArgumentParsing:
         """Status command should be recognized."""
         with patch.object(sys, 'argv', ['scjn_main', 'status']):
             with patch('src.scjn_main.asyncio.run') as mock_run:
+                mock_run.side_effect = lambda coro: coro.close()
                 main()
                 mock_run.assert_called_once()
 
@@ -67,6 +73,7 @@ class TestCLIArgumentParsing:
         """Resume should accept session-id."""
         with patch.object(sys, 'argv', ['scjn_main', 'resume', '--session-id', 'test123']):
             with patch('src.scjn_main.asyncio.run') as mock_run:
+                mock_run.side_effect = lambda coro: coro.close()
                 main()
                 mock_run.assert_called_once()
 

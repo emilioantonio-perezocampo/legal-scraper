@@ -5,8 +5,14 @@ SCJN Legislation Scraper - Main Entry Point
 Usage:
     python -m src.scjn_main discover --max-results 100
     python -m src.scjn_main discover --category LEY --scope FEDERAL
+    python -m src.scjn_main discover --use-llm  # Uses OpenRouter LLM extraction
     python -m src.scjn_main status
     python -m src.scjn_main resume --session-id <id>
+
+LLM Mode:
+    When CSS selectors break, use --use-llm for AI-based extraction.
+    Requires OPENROUTER_API_KEY environment variable.
+    Get your key at: https://openrouter.ai/keys
 """
 import argparse
 import asyncio
@@ -188,6 +194,99 @@ async def run_discovery(args):
         print("[OK] Shutdown complete.")
 
 
+async def run_llm_discovery(args):
+    """Run LLM-based document discovery using OpenRouter."""
+    import os
+    import json
+    from src.infrastructure.adapters.scjn_llm_parser import SCJNLLMParser
+
+    print("=" * 60)
+    print("SCJN Legislation Scraper (LLM Mode)")
+    print("=" * 60)
+    print(f"Model: {args.llm_model}")
+    print(f"Output directory: {args.output_dir}")
+    print(f"Max results: {args.max_results}")
+    if args.category:
+        print(f"Category filter: {args.category}")
+    if args.scope:
+        print(f"Scope filter: {args.scope}")
+    if args.status:
+        print(f"Status filter: {args.status}")
+    print("=" * 60)
+    print()
+
+    # Check API key
+    if not os.getenv("OPENROUTER_API_KEY"):
+        print("[ERROR] OPENROUTER_API_KEY environment variable not set")
+        print()
+        print("To get an API key:")
+        print("  1. Go to https://openrouter.ai/keys")
+        print("  2. Create a free account")
+        print("  3. Generate an API key")
+        print("  4. Run: export OPENROUTER_API_KEY='your-key-here'")
+        return
+
+    # Ensure output directory exists
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Create LLM parser
+        parser = SCJNLLMParser(
+            model=args.llm_model,
+            rate_limit_delay=1.0 / args.rate_limit if args.rate_limit > 0 else 2.0,
+        )
+        print(f"[OK] LLM parser initialized with {args.llm_model}")
+        print()
+
+        # Calculate max pages based on results (roughly 20 results per page)
+        max_pages = max(1, args.max_results // 20 + 1)
+
+        print(f"[SEARCH] Starting LLM-based discovery (max {max_pages} pages)...")
+        print()
+
+        documents = await parser.parse_multiple_pages(
+            max_pages=max_pages,
+            max_results=args.max_results,
+            category=args.category,
+            scope=args.scope,
+            status=args.status,
+        )
+
+        print()
+        print(f"[OK] Discovered {len(documents)} documents")
+
+        # Save documents to JSON files
+        if documents:
+            docs_dir = output_dir / "documents"
+            docs_dir.mkdir(exist_ok=True)
+
+            for i, doc in enumerate(documents, 1):
+                filename = docs_dir / f"doc_{i:04d}.json"
+                data = {
+                    "q_param": doc.q_param,
+                    "title": doc.title,
+                    "category": doc.category.name,
+                    "scope": doc.scope.name,
+                    "status": doc.status.name,
+                    "publication_date": doc.publication_date.isoformat() if doc.publication_date else None,
+                    "source_url": doc.source_url,
+                }
+                with open(filename, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+
+            print(f"[OK] Saved {len(documents)} documents to {docs_dir}/")
+
+        print()
+        print("[SUMMARY] LLM Discovery Complete")
+        print(f"[SUMMARY] Total documents: {len(documents)}")
+
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        import traceback
+        traceback.print_exc()
+
+
 async def show_status(args):
     """Show checkpoint status."""
     checkpoint_dir = Path(args.checkpoint_dir)
@@ -299,6 +398,14 @@ Examples:
         '--all-pages', action='store_true',
         help='Discover all pages (not just first)',
     )
+    discover_parser.add_argument(
+        '--use-llm', action='store_true',
+        help='Use OpenRouter LLM extraction (requires OPENROUTER_API_KEY)',
+    )
+    discover_parser.add_argument(
+        '--llm-model', type=str, default='anthropic/claude-3-haiku',
+        help='LLM model for extraction (default: anthropic/claude-3-haiku)',
+    )
 
     # Status command
     status_parser = subparsers.add_parser('status', help='Show checkpoint status')
@@ -325,7 +432,10 @@ Examples:
     args = parser.parse_args()
 
     if args.command == 'discover':
-        asyncio.run(run_discovery(args))
+        if hasattr(args, 'use_llm') and args.use_llm:
+            asyncio.run(run_llm_discovery(args))
+        else:
+            asyncio.run(run_discovery(args))
     elif args.command == 'status':
         asyncio.run(show_status(args))
     elif args.command == 'resume':

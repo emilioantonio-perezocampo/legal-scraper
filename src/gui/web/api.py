@@ -16,7 +16,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from dataclasses import dataclass
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -52,6 +53,13 @@ from src.gui.infrastructure.actors import (
     BJVJobFailed,
 )
 from src.domain.bjv_value_objects import AreaDerecho
+from src.gui.web.auth import (
+    AuthError,
+    AuthSettings,
+    create_access_token,
+    decode_access_token,
+    verify_password,
+)
 
 
 @dataclass
@@ -67,6 +75,42 @@ class ScraperArgs:
     scope: Optional[str] = None
     status: Optional[str] = None
     all_pages: bool = False
+
+
+auth_bearer = HTTPBearer(auto_error=False)
+
+
+async def require_auth(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(auth_bearer),
+) -> str:
+    settings: AuthSettings = request.app.state.auth_settings
+    if settings.disabled:
+        return "anonymous"
+
+    token = None
+    if credentials:
+        token = credentials.credentials
+    else:
+        cookie_token = request.cookies.get(settings.cookie_name)
+        if cookie_token:
+            token = cookie_token
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated.",
+        )
+
+    try:
+        payload = decode_access_token(token, settings)
+    except AuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+
+    return str(payload.get("sub", ""))
 
 
 # Pydantic models for API request/response
@@ -138,6 +182,20 @@ class HealthResponse(BaseModel):
     """Health check response."""
     status: str
     version: str = "1.0.0"
+
+
+class LoginRequest(BaseModel):
+    """Request model for login."""
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    """Response model for login."""
+    success: bool
+    access_token: Optional[str] = None
+    token_type: str = "bearer"
+    error: Optional[str] = None
 
 
 # SCJN-specific request/response models
@@ -387,6 +445,7 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
 
     # Store API instance in app state
     app.state.api = api
+    app.state.auth_settings = AuthSettings.from_env()
 
     # Setup templates
     templates_dir = Path(__file__).parent / "templates"
@@ -414,7 +473,42 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
             status="healthy" if api.service.is_running else "unhealthy"
         )
 
-    @app.get("/api/status", response_model=StatusResponse, tags=["Jobs"])
+    @app.post("/api/auth/login", response_model=LoginResponse, tags=["Auth"])
+    async def login(request: LoginRequest, response: Response):
+        """Exchange username/password for an access token."""
+        settings = app.state.auth_settings
+        if settings.disabled:
+            return LoginResponse(success=True, access_token="disabled")
+
+        if request.username != settings.username:
+            return LoginResponse(success=False, error="Invalid credentials.")
+
+        if not verify_password(request.password, settings.password_hash):
+            return LoginResponse(success=False, error="Invalid credentials.")
+
+        token = create_access_token(request.username, settings)
+        response.set_cookie(
+            settings.cookie_name,
+            token,
+            httponly=True,
+            secure=settings.cookie_secure,
+            samesite="lax",
+        )
+        return LoginResponse(success=True, access_token=token)
+
+    @app.post("/api/auth/logout", tags=["Auth"])
+    async def logout(response: Response):
+        """Clear authentication cookie."""
+        settings = app.state.auth_settings
+        response.delete_cookie(settings.cookie_name)
+        return {"success": True}
+
+    @app.get(
+        "/api/status",
+        response_model=StatusResponse,
+        tags=["Jobs"],
+        dependencies=[Depends(require_auth)],
+    )
     async def get_status():
         """Get current job status."""
         result = await api.service.get_status()
@@ -435,7 +529,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
 
         return response
 
-    @app.post("/api/start", response_model=StartJobResponse, tags=["Jobs"])
+    @app.post(
+        "/api/start",
+        response_model=StartJobResponse,
+        tags=["Jobs"],
+        dependencies=[Depends(require_auth)],
+    )
     async def start_scraping(request: StartJobRequest):
         """Start a new scraping job."""
         try:
@@ -490,25 +589,45 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         except Exception as e:
             return StartJobResponse(success=False, error=str(e))
 
-    @app.post("/api/pause", response_model=ActionResponse, tags=["Jobs"])
+    @app.post(
+        "/api/pause",
+        response_model=ActionResponse,
+        tags=["Jobs"],
+        dependencies=[Depends(require_auth)],
+    )
     async def pause_scraping():
         """Pause the current scraping job."""
         result = await api.service.pause_scraping()
         return ActionResponse(success=result.success, error=result.error)
 
-    @app.post("/api/resume", response_model=ActionResponse, tags=["Jobs"])
+    @app.post(
+        "/api/resume",
+        response_model=ActionResponse,
+        tags=["Jobs"],
+        dependencies=[Depends(require_auth)],
+    )
     async def resume_scraping():
         """Resume a paused scraping job."""
         result = await api.service.resume_scraping()
         return ActionResponse(success=result.success, error=result.error)
 
-    @app.post("/api/cancel", response_model=ActionResponse, tags=["Jobs"])
+    @app.post(
+        "/api/cancel",
+        response_model=ActionResponse,
+        tags=["Jobs"],
+        dependencies=[Depends(require_auth)],
+    )
     async def cancel_scraping():
         """Cancel the current scraping job."""
         result = await api.service.cancel_scraping()
         return ActionResponse(success=result.success, error=result.error)
 
-    @app.get("/api/logs", response_model=LogsResponse, tags=["Logs"])
+    @app.get(
+        "/api/logs",
+        response_model=LogsResponse,
+        tags=["Logs"],
+        dependencies=[Depends(require_auth)],
+    )
     async def get_logs():
         """Get current job logs."""
         state = await api.service.state_actor.ask("GET_STATE")
@@ -525,7 +644,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
 
         return LogsResponse(logs=logs)
 
-    @app.get("/api/config/options", response_model=ConfigOptionsResponse, tags=["Configuration"])
+    @app.get(
+        "/api/config/options",
+        response_model=ConfigOptionsResponse,
+        tags=["Configuration"],
+        dependencies=[Depends(require_auth)],
+    )
     async def get_config_options():
         """Get available configuration options."""
         config_service = ConfigurationService()
@@ -551,7 +675,11 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
             formats=formats
         )
 
-    @app.get("/api/events", tags=["Events"])
+    @app.get(
+        "/api/events",
+        tags=["Events"],
+        dependencies=[Depends(require_auth)],
+    )
     async def event_stream():
         """Server-Sent Events stream for real-time updates."""
         async def generate() -> AsyncGenerator[str, None]:
@@ -579,7 +707,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
 
     # ============ SCJN API Endpoints ============
 
-    @app.get("/api/scjn/status", response_model=SCJNStatusResponse, tags=["SCJN"])
+    @app.get(
+        "/api/scjn/status",
+        response_model=SCJNStatusResponse,
+        tags=["SCJN"],
+        dependencies=[Depends(require_auth)],
+    )
     async def get_scjn_status():
         """Get current SCJN job status."""
         if not api.scjn_bridge:
@@ -610,7 +743,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
             progress=progress_dict
         )
 
-    @app.post("/api/scjn/start", response_model=StartJobResponse, tags=["SCJN"])
+    @app.post(
+        "/api/scjn/start",
+        response_model=StartJobResponse,
+        tags=["SCJN"],
+        dependencies=[Depends(require_auth)],
+    )
     async def start_scjn_scraping(request: SCJNStartRequest):
         """Start a new SCJN scraping job."""
         if not api.scjn_bridge:
@@ -643,7 +781,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         except Exception as e:
             return StartJobResponse(success=False, error=str(e))
 
-    @app.post("/api/scjn/pause", response_model=ActionResponse, tags=["SCJN"])
+    @app.post(
+        "/api/scjn/pause",
+        response_model=ActionResponse,
+        tags=["SCJN"],
+        dependencies=[Depends(require_auth)],
+    )
     async def pause_scjn_scraping():
         """Pause the current SCJN scraping job."""
         if not api.scjn_bridge:
@@ -652,7 +795,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         result = await api.scjn_bridge.ask("PAUSE_SEARCH")
         return ActionResponse(success=result.get("success", False), error=result.get("error"))
 
-    @app.post("/api/scjn/resume", response_model=ActionResponse, tags=["SCJN"])
+    @app.post(
+        "/api/scjn/resume",
+        response_model=ActionResponse,
+        tags=["SCJN"],
+        dependencies=[Depends(require_auth)],
+    )
     async def resume_scjn_scraping():
         """Resume a paused SCJN scraping job."""
         if not api.scjn_bridge:
@@ -661,7 +809,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         result = await api.scjn_bridge.ask("RESUME_SEARCH")
         return ActionResponse(success=result.get("success", False), error=result.get("error"))
 
-    @app.post("/api/scjn/cancel", response_model=ActionResponse, tags=["SCJN"])
+    @app.post(
+        "/api/scjn/cancel",
+        response_model=ActionResponse,
+        tags=["SCJN"],
+        dependencies=[Depends(require_auth)],
+    )
     async def cancel_scjn_scraping():
         """Cancel the current SCJN scraping job."""
         if not api.scjn_bridge:
@@ -670,7 +823,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         result = await api.scjn_bridge.ask("STOP_SEARCH")
         return ActionResponse(success=result.get("success", False))
 
-    @app.get("/api/scjn/logs", response_model=LogsResponse, tags=["SCJN"])
+    @app.get(
+        "/api/scjn/logs",
+        response_model=LogsResponse,
+        tags=["SCJN"],
+        dependencies=[Depends(require_auth)],
+    )
     async def get_scjn_logs():
         """Get SCJN job logs."""
         logs = [
@@ -684,7 +842,11 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         ]
         return LogsResponse(logs=logs)
 
-    @app.get("/api/scjn/categories", tags=["SCJN"])
+    @app.get(
+        "/api/scjn/categories",
+        tags=["SCJN"],
+        dependencies=[Depends(require_auth)],
+    )
     async def get_scjn_categories():
         """Get available SCJN legislation categories."""
         return {
@@ -706,7 +868,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
 
     # ============ BJV API Endpoints ============
 
-    @app.get("/api/bjv/status", response_model=BJVStatusResponse, tags=["BJV"])
+    @app.get(
+        "/api/bjv/status",
+        response_model=BJVStatusResponse,
+        tags=["BJV"],
+        dependencies=[Depends(require_auth)],
+    )
     async def get_bjv_status():
         """Get current BJV job status."""
         if not api.bjv_bridge:
@@ -735,7 +902,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
             progress=progress_dict
         )
 
-    @app.post("/api/bjv/start", response_model=StartJobResponse, tags=["BJV"])
+    @app.post(
+        "/api/bjv/start",
+        response_model=StartJobResponse,
+        tags=["BJV"],
+        dependencies=[Depends(require_auth)],
+    )
     async def start_bjv_scraping(request: BJVStartRequest):
         """Start a new BJV scraping job."""
         if not api.bjv_bridge:
@@ -778,7 +950,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         except Exception as e:
             return StartJobResponse(success=False, error=str(e))
 
-    @app.post("/api/bjv/pause", response_model=ActionResponse, tags=["BJV"])
+    @app.post(
+        "/api/bjv/pause",
+        response_model=ActionResponse,
+        tags=["BJV"],
+        dependencies=[Depends(require_auth)],
+    )
     async def pause_bjv_scraping():
         """Pause the current BJV scraping job."""
         if not api.bjv_bridge:
@@ -787,7 +964,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         result = await api.bjv_bridge.ask("PAUSE_SEARCH")
         return ActionResponse(success=result.get("success", False), error=result.get("error"))
 
-    @app.post("/api/bjv/resume", response_model=ActionResponse, tags=["BJV"])
+    @app.post(
+        "/api/bjv/resume",
+        response_model=ActionResponse,
+        tags=["BJV"],
+        dependencies=[Depends(require_auth)],
+    )
     async def resume_bjv_scraping():
         """Resume a paused BJV scraping job."""
         if not api.bjv_bridge:
@@ -796,7 +978,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         result = await api.bjv_bridge.ask("RESUME_SEARCH")
         return ActionResponse(success=result.get("success", False), error=result.get("error"))
 
-    @app.post("/api/bjv/cancel", response_model=ActionResponse, tags=["BJV"])
+    @app.post(
+        "/api/bjv/cancel",
+        response_model=ActionResponse,
+        tags=["BJV"],
+        dependencies=[Depends(require_auth)],
+    )
     async def cancel_bjv_scraping():
         """Cancel the current BJV scraping job."""
         if not api.bjv_bridge:
@@ -805,7 +992,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         result = await api.bjv_bridge.ask("STOP_SEARCH")
         return ActionResponse(success=result.get("success", False))
 
-    @app.get("/api/bjv/logs", response_model=LogsResponse, tags=["BJV"])
+    @app.get(
+        "/api/bjv/logs",
+        response_model=LogsResponse,
+        tags=["BJV"],
+        dependencies=[Depends(require_auth)],
+    )
     async def get_bjv_logs():
         """Get BJV job logs."""
         logs = [
@@ -819,7 +1011,11 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         ]
         return LogsResponse(logs=logs)
 
-    @app.get("/api/bjv/areas", tags=["BJV"])
+    @app.get(
+        "/api/bjv/areas",
+        tags=["BJV"],
+        dependencies=[Depends(require_auth)],
+    )
     async def get_bjv_areas():
         """Get available BJV legal areas."""
         return {
@@ -839,7 +1035,12 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
 
     # ============ Web UI Routes ============
 
-    @app.get("/", response_class=HTMLResponse, tags=["Web UI"])
+    @app.get(
+        "/",
+        response_class=HTMLResponse,
+        tags=["Web UI"],
+        dependencies=[Depends(require_auth)],
+    )
     async def index(request: Request):
         """Serve the main web UI."""
         if templates:

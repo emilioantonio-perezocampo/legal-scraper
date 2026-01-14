@@ -27,7 +27,7 @@ class TestCASPipelineIntegration:
 
         coordinator = AsyncMock()
         browser = AsyncMock()
-        browser.render_page = AsyncMock(return_value=Mock(
+        browser.execute_search = AsyncMock(return_value=Mock(
             html="<html><a href='/cases/CAS-2023-A-1'>Case 1</a></html>",
             status_code=200
         ))

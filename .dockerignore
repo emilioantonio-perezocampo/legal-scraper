@@ -26,3 +26,7 @@ _scratch/
 .idea/
 .claude/
 .gemini/
+reflex_ui/.web/
+reflex_ui/.reflex/
+reflex_ui/.next/
+reflex_ui/node_modules/

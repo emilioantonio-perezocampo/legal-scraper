@@ -8,14 +8,35 @@ dependencies:
   - pytest-asyncio
   - pytest-cov
   - pip
-  - aiohttp          # NEW: Async HTTP client
-  - beautifulsoup4   # NEW: HTML Parser
-  - lxml             # NEW: Faster parser engine
-  - tk               # GUI: Tkinter for local GUI support
+  # Core scraping dependencies
+  - aiohttp          # Async HTTP client
+  - beautifulsoup4   # HTML Parser
+  - lxml             # Faster parser engine
+  # GUI: Desktop (optional for headless)
+  - tk               # Tkinter for local GUI support
   # Web GUI dependencies
   - fastapi          # Web framework for REST API
   - uvicorn          # ASGI server for FastAPI
   - jinja2           # Template engine for HTML pages
+  - httpx            # Async ASGI test client
   # Terminal TUI dependencies
   - textual          # Modern terminal UI framework
   - rich             # Rich text and formatting for terminal
+  - pip:
+      - pyjwt
+      - reflex
+      # PDF Processing
+      - pdfplumber       # Primary PDF text extraction
+      - pypdf            # Fallback PDF processing
+      - pymupdf          # Fast PDF extraction (BJV)
+      # Embeddings & Vector Search
+      - faiss-cpu        # Vector similarity search
+      - sentence-transformers  # Text embedding models
+      - tiktoken         # Token counting for chunking
+      # Browser Automation
+      - playwright       # Headless browser for dynamic sites (CAS)
+      # Retry & Resilience
+      - tenacity         # Retry logic with backoff
+      # LLM Scraping (OpenRouter)
+      - instructor>=1.0.0    # Structured LLM extraction with Pydantic
+      - openai>=1.0.0        # OpenRouter compatibility layer

@@ -27,5 +27,7 @@ def test_parse_dof_index_finds_urls():
     links = parse_dof_index(SAMPLE_INDEX_HTML)
 
     assert len(links) == 2
-    assert "https://dof.gob.mx/nota_detalle.php?codigo=12345&fecha=29/12/2025" in links
-    assert "https://dof.gob.mx/nota_detalle.php?codigo=67890&fecha=29/12/2025" in links
+    # Function returns list of dicts with 'url' and 'title' keys
+    urls = [item['url'] for item in links]
+    assert "https://dof.gob.mx/nota_detalle.php?codigo=12345&fecha=29/12/2025" in urls
+    assert "https://dof.gob.mx/nota_detalle.php?codigo=67890&fecha=29/12/2025" in urls

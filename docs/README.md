@@ -6,6 +6,7 @@ The diagrams are generated from code and serve as the source of truth for the sy
 
 ## Structure
 - `ARCHITECT.md`: High-level architectural overview, tech stack, and patterns.
+- `DEPLOYMENT.md`: Production setup for Reflex UI + FastAPI API.
 - `decisions/`: Architectural Decision Records (ADRs).
 - `diagrams/`: Visual representations of the system.
     - `src/`: Source files for diagrams (PlantUML, Mermaid).
