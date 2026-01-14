@@ -10,6 +10,10 @@ Provides endpoints for:
 """
 import asyncio
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 from datetime import date
 from typing import Optional, List, Any, AsyncGenerator
 from contextlib import asynccontextmanager

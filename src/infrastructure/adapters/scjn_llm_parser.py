@@ -90,6 +90,8 @@ class SCJNLLMParser:
 
     BASE_URL = "https://legislacion.scjn.gob.mx"
     SEARCH_URL = f"{BASE_URL}/Buscador/Paginas/Buscar.aspx"
+    # URL for recent reforms (shows actual results without form submission)
+    REFORMAS_URL = f"{BASE_URL}/Buscador/Paginas/wfReformasResultados.aspx?q=78tXSP4D9DqLbEkEfwPY3A=="
 
     EXTRACTION_INSTRUCTION = """
 You are extracting Mexican legal documents from the SCJN (Supreme Court of Justice) website.
@@ -147,7 +149,7 @@ Look for patterns in the HTML like tables, divs with document listings, links wi
 
     def __init__(
         self,
-        model: str = "anthropic/claude-3-haiku",
+        model: str = "x-ai/grok-4.1-fast",
         rate_limit_delay: float = 2.0,
         api_key: Optional[str] = None
     ):
@@ -184,20 +186,25 @@ Look for patterns in the HTML like tables, divs with document listings, links wi
         Returns:
             Tuple of (list of SCJNDocument entities, has_more_pages)
         """
-        # Build URL with parameters
-        params = []
-        if category:
-            params.append(f"categoria={category}")
-        if scope:
-            params.append(f"ambito={scope}")
-        if status:
-            params.append(f"estatus={status}")
-        if page > 1:
-            params.append(f"pagina={page}")
+        # Use reforms URL which shows actual results (search requires POST)
+        # For page 1 with no filters, use the recent reforms page
+        if page == 1 and not any([category, scope, status, query]):
+            url = self.REFORMAS_URL
+        else:
+            # Build URL with parameters for filtered searches
+            params = []
+            if category:
+                params.append(f"categoria={category}")
+            if scope:
+                params.append(f"ambito={scope}")
+            if status:
+                params.append(f"estatus={status}")
+            if page > 1:
+                params.append(f"pagina={page}")
 
-        url = self.SEARCH_URL
-        if params:
-            url += "?" + "&".join(params)
+            url = self.SEARCH_URL
+            if params:
+                url += "?" + "&".join(params)
 
         logger.info(f"Fetching SCJN page: {url}")
 

@@ -5,12 +5,12 @@ SCJN Legislation Scraper - Main Entry Point
 Usage:
     python -m src.scjn_main discover --max-results 100
     python -m src.scjn_main discover --category LEY --scope FEDERAL
-    python -m src.scjn_main discover --use-llm  # Uses OpenRouter LLM extraction
+    python -m src.scjn_main discover --no-llm  # Use CSS selectors (may break)
     python -m src.scjn_main status
     python -m src.scjn_main resume --session-id <id>
 
-LLM Mode:
-    When CSS selectors break, use --use-llm for AI-based extraction.
+LLM Mode (Default):
+    Uses OpenRouter for AI-based extraction (resilient to website changes).
     Requires OPENROUTER_API_KEY environment variable.
     Get your key at: https://openrouter.ai/keys
 """
@@ -18,6 +18,10 @@ import argparse
 import asyncio
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from src.infrastructure.actors.scjn_coordinator_actor import (
     SCJNCoordinatorActor,
@@ -399,12 +403,16 @@ Examples:
         help='Discover all pages (not just first)',
     )
     discover_parser.add_argument(
-        '--use-llm', action='store_true',
-        help='Use OpenRouter LLM extraction (requires OPENROUTER_API_KEY)',
+        '--use-llm', action='store_true', default=True,
+        help='Use OpenRouter LLM extraction (default: True, requires OPENROUTER_API_KEY)',
     )
     discover_parser.add_argument(
-        '--llm-model', type=str, default='anthropic/claude-3-haiku',
-        help='LLM model for extraction (default: anthropic/claude-3-haiku)',
+        '--no-llm', action='store_true',
+        help='Disable LLM mode and use CSS selectors (may break if site changes)',
+    )
+    discover_parser.add_argument(
+        '--llm-model', type=str, default='x-ai/grok-4.1-fast',
+        help='LLM model for extraction (default: x-ai/grok-4.1-fast)',
     )
 
     # Status command
@@ -432,10 +440,11 @@ Examples:
     args = parser.parse_args()
 
     if args.command == 'discover':
-        if hasattr(args, 'use_llm') and args.use_llm:
-            asyncio.run(run_llm_discovery(args))
-        else:
+        # LLM mode is default; use --no-llm to disable
+        if hasattr(args, 'no_llm') and args.no_llm:
             asyncio.run(run_discovery(args))
+        else:
+            asyncio.run(run_llm_discovery(args))
     elif args.command == 'status':
         asyncio.run(show_status(args))
     elif args.command == 'resume':

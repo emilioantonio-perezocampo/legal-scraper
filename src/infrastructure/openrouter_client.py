@@ -17,13 +17,13 @@ T = TypeVar('T', bound=BaseModel)
 class OpenRouterClient:
     """Async client for OpenRouter API with structured extraction."""
 
-    DEFAULT_MODEL = "anthropic/claude-3-haiku"  # Fast, cheap, good at extraction
+    DEFAULT_MODEL = "x-ai/grok-4.1-fast"  # Fast, cheap, 2M context
 
     # Cost-effective models for scraping (as of 2025)
     RECOMMENDED_MODELS = {
-        "fast": "anthropic/claude-3-haiku",           # $0.25/1M input tokens
+        "fast": "x-ai/grok-4.1-fast",                 # $0.20/1M input, 2M context
         "balanced": "openai/gpt-4o-mini",             # $0.15/1M input tokens
-        "cheap": "meta-llama/llama-3.1-8b-instruct",  # Often free tier
+        "cheap": "deepseek/deepseek-chat-v3-0324",    # Very cheap, good quality
         "quality": "anthropic/claude-3.5-sonnet",     # Better but pricier
     }
 
@@ -65,10 +65,10 @@ class OpenRouterClient:
         )
 
         # Wrap with instructor for structured extraction
-        # Use OPENROUTER_STRUCTURED_OUTPUTS for native OpenRouter support
+        # Use JSON mode for better compatibility across providers
         self._instructor = instructor.from_openai(
             self._client,
-            mode=instructor.Mode.OPENROUTER_STRUCTURED_OUTPUTS
+            mode=instructor.Mode.JSON
         )
 
     async def extract(
