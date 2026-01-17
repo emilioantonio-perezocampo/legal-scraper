@@ -55,6 +55,18 @@ from src.gui.infrastructure.actors import (
     BJVJobProgress,
     BJVJobCompleted,
     BJVJobFailed,
+    CASGuiBridgeActor,
+    CASGuiConfig,
+    CASJobStarted,
+    CASJobProgress,
+    CASJobCompleted,
+    CASJobError,
+    DOFGuiBridgeActor,
+    DOFGuiConfig,
+    DOFJobStarted,
+    DOFJobProgress,
+    DOFJobCompleted,
+    DOFJobError,
 )
 from src.domain.bjv_value_objects import AreaDerecho
 from src.gui.web.auth import (
@@ -258,6 +270,54 @@ class BJVProgressResponse(BaseModel):
     estado: str = "IDLE"
 
 
+# CAS-specific request/response models
+class CASStartRequest(BaseModel):
+    """Request model for starting CAS scraping job."""
+    year_from: Optional[int] = Field(default=None, description="Start year filter")
+    year_to: Optional[int] = Field(default=None, description="End year filter")
+    sport: Optional[str] = Field(default=None, description="Sport filter")
+    matter: Optional[str] = Field(default=None, description="Matter/subject filter")
+    max_results: int = Field(default=100, ge=1, le=1000, description="Maximum results to fetch")
+
+
+class CASStatusResponse(BaseModel):
+    """Response model for CAS status endpoint."""
+    status: str
+    job_id: Optional[str] = None
+    progress: Optional[dict] = None
+
+
+class CASFiltersResponse(BaseModel):
+    """Response model for CAS filters endpoint."""
+    sports: List[str]
+    matters: List[str]
+    year_range: dict
+
+
+# DOF-specific request/response models
+class DOFStartRequest(BaseModel):
+    """Request model for starting DOF scraping job."""
+    mode: str = Field(default="today", description="Scraping mode: 'today' or 'range'")
+    start_date: Optional[str] = Field(default=None, description="Start date (YYYY-MM-DD) for range mode")
+    end_date: Optional[str] = Field(default=None, description="End date (YYYY-MM-DD) for range mode")
+    section: Optional[str] = Field(default=None, description="DOF section filter")
+    download_pdfs: bool = Field(default=True, description="Download PDF files")
+    output_directory: str = Field(default="dof_data", description="Output directory")
+
+
+class DOFStatusResponse(BaseModel):
+    """Response model for DOF status endpoint."""
+    status: str
+    job_id: Optional[str] = None
+    progress: Optional[dict] = None
+
+
+class DOFSectionsResponse(BaseModel):
+    """Response model for DOF sections endpoint."""
+    sections: List[dict]
+    modes: List[dict]
+
+
 class ScraperAPI:
     """
     Orchestrator class for the Web API.
@@ -275,6 +335,10 @@ class ScraperAPI:
         self._scjn_logs: List[dict] = []
         self._bjv_bridge: Optional[BJVGuiBridgeActor] = None
         self._bjv_logs: List[dict] = []
+        self._cas_bridge: Optional[CASGuiBridgeActor] = None
+        self._cas_logs: List[dict] = []
+        self._dof_bridge: Optional[DOFGuiBridgeActor] = None
+        self._dof_logs: List[dict] = []
 
     @property
     def service(self) -> ScraperService:
@@ -287,6 +351,14 @@ class ScraperAPI:
     @property
     def bjv_bridge(self) -> Optional[BJVGuiBridgeActor]:
         return self._bjv_bridge
+
+    @property
+    def cas_bridge(self) -> Optional[CASGuiBridgeActor]:
+        return self._cas_bridge
+
+    @property
+    def dof_bridge(self) -> Optional[DOFGuiBridgeActor]:
+        return self._dof_bridge
 
     async def startup(self):
         """Start the scraper service and bridges."""
@@ -323,6 +395,29 @@ class ScraperAPI:
         )
         await self._bjv_bridge.start()
 
+        # Initialize CAS bridge
+        self._cas_bridge = CASGuiBridgeActor(
+            on_event=self._handle_cas_event
+        )
+        # Note: CAS bridge doesn't require start() as it inherits from CASBaseActor
+        self._cas_logs.append({
+            "level": "info",
+            "message": "CAS bridge initialized",
+            "source": "System",
+            "timestamp": __import__('datetime').datetime.now().isoformat()
+        })
+
+        # Initialize DOF bridge
+        self._dof_bridge = DOFGuiBridgeActor(
+            on_event=self._handle_dof_event
+        )
+        self._dof_logs.append({
+            "level": "info",
+            "message": "DOF bridge initialized",
+            "source": "System",
+            "timestamp": __import__('datetime').datetime.now().isoformat()
+        })
+
     async def shutdown(self):
         """Stop the scraper service and bridges."""
         await self._service.stop()
@@ -332,6 +427,10 @@ class ScraperAPI:
             await stop_pipeline(self._scjn_coordinator)
         if self._bjv_bridge:
             await self._bjv_bridge.stop()
+        # CAS bridge cleanup (no explicit stop needed for CASBaseActor)
+        self._cas_bridge = None
+        # DOF bridge cleanup
+        self._dof_bridge = None
 
     async def _handle_scjn_event(self, event):
         """Handle SCJN events for logging and broadcasting."""
@@ -397,6 +496,70 @@ class ScraperAPI:
 
         # Broadcast to SSE subscribers
         await self.broadcast_event("bjv_event", {"type": type(event).__name__})
+
+    async def _handle_cas_event(self, event):
+        """Handle CAS events for logging and broadcasting."""
+        from datetime import datetime
+
+        if isinstance(event, CASJobStarted):
+            self._cas_logs.append({
+                "level": "info",
+                "message": f"CAS job started: {event.job_id}",
+                "source": "CAS",
+                "timestamp": event.timestamp
+            })
+        elif isinstance(event, CASJobProgress):
+            # Don't spam logs with progress updates
+            pass
+        elif isinstance(event, CASJobCompleted):
+            self._cas_logs.append({
+                "level": "success",
+                "message": f"CAS job completed: {event.job_id}",
+                "source": "CAS",
+                "timestamp": event.timestamp
+            })
+        elif isinstance(event, CASJobError):
+            self._cas_logs.append({
+                "level": "error",
+                "message": f"CAS job error: {event.mensaje}",
+                "source": "CAS",
+                "timestamp": event.timestamp
+            })
+
+        # Broadcast to SSE subscribers
+        await self.broadcast_event("cas_event", {"type": type(event).__name__})
+
+    async def _handle_dof_event(self, event):
+        """Handle DOF events for logging and broadcasting."""
+        from datetime import datetime
+
+        if isinstance(event, DOFJobStarted):
+            self._dof_logs.append({
+                "level": "info",
+                "message": f"DOF job started: {event.job_id}",
+                "source": "DOF",
+                "timestamp": event.timestamp
+            })
+        elif isinstance(event, DOFJobProgress):
+            # Don't spam logs with progress updates
+            pass
+        elif isinstance(event, DOFJobCompleted):
+            self._dof_logs.append({
+                "level": "success",
+                "message": f"DOF job completed: {event.job_id}",
+                "source": "DOF",
+                "timestamp": event.timestamp
+            })
+        elif isinstance(event, DOFJobError):
+            self._dof_logs.append({
+                "level": "error",
+                "message": f"DOF job error: {event.mensaje}",
+                "source": "DOF",
+                "timestamp": event.timestamp
+            })
+
+        # Broadcast to SSE subscribers
+        await self.broadcast_event("dof_event", {"type": type(event).__name__})
 
     def add_event_subscriber(self, queue: asyncio.Queue):
         """Add a subscriber for real-time events."""
@@ -1036,6 +1199,360 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
                 {"value": "general", "label": "General"},
             ]
         }
+
+    # ============ CAS API Endpoints ============
+
+    @app.get(
+        "/api/cas/status",
+        response_model=CASStatusResponse,
+        tags=["CAS"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_cas_status():
+        """Get CAS scraper job status."""
+        if not api.cas_bridge:
+            return CASStatusResponse(status="idle")
+
+        # Get current job status from bridge
+        job_id = api.cas_bridge._current_job_id
+        status = "running" if job_id else "idle"
+
+        progress = None
+        if job_id:
+            progress = {
+                "discovered": 0,
+                "downloaded": 0,
+                "processed": 0,
+                "errors": 0,
+            }
+
+        return CASStatusResponse(
+            status=status,
+            job_id=job_id,
+            progress=progress
+        )
+
+    @app.get(
+        "/api/cas/filters",
+        response_model=CASFiltersResponse,
+        tags=["CAS"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_cas_filters():
+        """Get available CAS filter options (sports, matters, years)."""
+        return CASFiltersResponse(
+            sports=[
+                "football",
+                "athletics",
+                "cycling",
+                "swimming",
+                "tennis",
+                "basketball",
+                "skiing",
+                "ice hockey",
+            ],
+            matters=[
+                "doping",
+                "eligibility",
+                "transfer",
+                "contract",
+                "disciplinary",
+                "governance",
+            ],
+            year_range={
+                "min": 1986,
+                "max": 2026,
+            }
+        )
+
+    @app.post(
+        "/api/cas/start",
+        response_model=StartJobResponse,
+        tags=["CAS"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def start_cas_scraping(request: CASStartRequest):
+        """Start a new CAS scraping job."""
+        if not api.cas_bridge:
+            return StartJobResponse(success=False, error="CAS bridge not initialized")
+
+        try:
+            # Create CAS config from request
+            config = CASGuiConfig(
+                year_from=request.year_from,
+                year_to=request.year_to,
+                sport=request.sport,
+                matter=request.matter,
+                max_results=request.max_results,
+            )
+
+            # Start job via bridge
+            job_id = await api.cas_bridge.start_job(config)
+
+            api._cas_logs.append({
+                "level": "info",
+                "message": f"Starting CAS search (sport={request.sport}, matter={request.matter})",
+                "source": "CAS",
+                "timestamp": __import__('datetime').datetime.now().isoformat()
+            })
+
+            return StartJobResponse(success=True, job_id=job_id)
+        except Exception as e:
+            return StartJobResponse(success=False, error=str(e))
+
+    @app.post(
+        "/api/cas/pause",
+        response_model=ActionResponse,
+        tags=["CAS"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def pause_cas_scraping():
+        """Pause the current CAS scraping job."""
+        if not api.cas_bridge:
+            return ActionResponse(success=False, error="CAS bridge not initialized")
+
+        try:
+            await api.cas_bridge.pause_job()
+            return ActionResponse(success=True)
+        except Exception as e:
+            return ActionResponse(success=False, error=str(e))
+
+    @app.post(
+        "/api/cas/resume",
+        response_model=ActionResponse,
+        tags=["CAS"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def resume_cas_scraping():
+        """Resume a paused CAS scraping job."""
+        if not api.cas_bridge:
+            return ActionResponse(success=False, error="CAS bridge not initialized")
+
+        try:
+            await api.cas_bridge.resume_job()
+            return ActionResponse(success=True)
+        except Exception as e:
+            return ActionResponse(success=False, error=str(e))
+
+    @app.post(
+        "/api/cas/cancel",
+        response_model=ActionResponse,
+        tags=["CAS"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def cancel_cas_scraping():
+        """Cancel the current CAS scraping job."""
+        if not api.cas_bridge:
+            return ActionResponse(success=False, error="CAS bridge not initialized")
+
+        try:
+            await api.cas_bridge.stop_job()
+            return ActionResponse(success=True)
+        except Exception as e:
+            return ActionResponse(success=False, error=str(e))
+
+    @app.get(
+        "/api/cas/logs",
+        response_model=LogsResponse,
+        tags=["CAS"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_cas_logs(
+        limit: int = 100,
+        level: Optional[str] = None,
+    ):
+        """Get CAS job logs."""
+        logs = api._cas_logs[-limit:]  # Last N logs
+
+        # Filter by level if specified
+        if level:
+            logs = [log for log in logs if log.get("level") == level]
+
+        log_entries = [
+            LogEntry(
+                level=log["level"],
+                message=log["message"],
+                source=log["source"],
+                timestamp=log["timestamp"]
+            )
+            for log in logs
+        ]
+        return LogsResponse(logs=log_entries)
+
+    # ============ DOF API Endpoints ============
+
+    @app.get(
+        "/api/dof/status",
+        response_model=DOFStatusResponse,
+        tags=["DOF"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_dof_status():
+        """Get DOF scraper job status."""
+        if not api.dof_bridge:
+            return DOFStatusResponse(status="idle")
+
+        # Get current job status from bridge
+        job_id = api.dof_bridge._current_job_id
+        status = "running" if job_id else "idle"
+
+        progress = None
+        if job_id:
+            progress = {
+                "total_documents": 0,
+                "processed_documents": 0,
+            }
+
+        return DOFStatusResponse(
+            status=status,
+            job_id=job_id,
+            progress=progress
+        )
+
+    @app.get(
+        "/api/dof/sections",
+        response_model=DOFSectionsResponse,
+        tags=["DOF"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_dof_sections():
+        """Get available DOF sections and scraping modes."""
+        return DOFSectionsResponse(
+            sections=[
+                {"value": "primera", "name": "Primera Sección", "label": "Primera Sección"},
+                {"value": "segunda", "name": "Segunda Sección", "label": "Segunda Sección"},
+                {"value": "tercera", "name": "Tercera Sección", "label": "Tercera Sección"},
+                {"value": "cuarta", "name": "Cuarta Sección", "label": "Cuarta Sección"},
+                {"value": "quinta", "name": "Quinta Sección", "label": "Quinta Sección"},
+            ],
+            modes=[
+                {"value": "today", "label": "Hoy"},
+                {"value": "range", "label": "Rango de fechas"},
+            ]
+        )
+
+    @app.post(
+        "/api/dof/start",
+        response_model=StartJobResponse,
+        tags=["DOF"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def start_dof_scraping(request: DOFStartRequest):
+        """Start a new DOF scraping job."""
+        # Validate date range mode requires dates (before bridge check)
+        if request.mode == "range":
+            if not request.start_date or not request.end_date:
+                raise HTTPException(
+                    status_code=400,
+                    detail="start_date and end_date are required for range mode"
+                )
+
+        if not api.dof_bridge:
+            return StartJobResponse(success=False, error="DOF bridge not initialized")
+
+        try:
+            # Create DOF config from request
+            config = DOFGuiConfig(
+                mode=request.mode,
+                start_date=request.start_date,
+                end_date=request.end_date,
+                section=request.section,
+                download_pdfs=request.download_pdfs,
+                output_directory=request.output_directory,
+            )
+
+            # Start job via bridge
+            job_id = await api.dof_bridge.start_job(config)
+
+            api._dof_logs.append({
+                "level": "info",
+                "message": f"Starting DOF scrape (mode={request.mode}, section={request.section})",
+                "source": "DOF",
+                "timestamp": __import__('datetime').datetime.now().isoformat()
+            })
+
+            return StartJobResponse(success=True, job_id=job_id)
+        except Exception as e:
+            return StartJobResponse(success=False, error=str(e))
+
+    @app.post(
+        "/api/dof/pause",
+        response_model=ActionResponse,
+        tags=["DOF"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def pause_dof_scraping():
+        """Pause the current DOF scraping job."""
+        if not api.dof_bridge:
+            return ActionResponse(success=False, error="DOF bridge not initialized")
+
+        try:
+            await api.dof_bridge.pause_job()
+            return ActionResponse(success=True)
+        except Exception as e:
+            return ActionResponse(success=False, error=str(e))
+
+    @app.post(
+        "/api/dof/resume",
+        response_model=ActionResponse,
+        tags=["DOF"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def resume_dof_scraping():
+        """Resume a paused DOF scraping job."""
+        if not api.dof_bridge:
+            return ActionResponse(success=False, error="DOF bridge not initialized")
+
+        try:
+            await api.dof_bridge.resume_job()
+            return ActionResponse(success=True)
+        except Exception as e:
+            return ActionResponse(success=False, error=str(e))
+
+    @app.post(
+        "/api/dof/cancel",
+        response_model=ActionResponse,
+        tags=["DOF"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def cancel_dof_scraping():
+        """Cancel the current DOF scraping job."""
+        if not api.dof_bridge:
+            return ActionResponse(success=False, error="DOF bridge not initialized")
+
+        try:
+            await api.dof_bridge.stop_job()
+            return ActionResponse(success=True)
+        except Exception as e:
+            return ActionResponse(success=False, error=str(e))
+
+    @app.get(
+        "/api/dof/logs",
+        response_model=LogsResponse,
+        tags=["DOF"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_dof_logs(
+        limit: int = 100,
+        level: Optional[str] = None,
+    ):
+        """Get DOF job logs."""
+        logs = api._dof_logs[-limit:]  # Last N logs
+
+        # Filter by level if specified
+        if level:
+            logs = [log for log in logs if log.get("level") == level]
+
+        log_entries = [
+            LogEntry(
+                level=log["level"],
+                message=log["message"],
+                source=log["source"],
+                timestamp=log["timestamp"]
+            )
+            for log in logs
+        ]
+        return LogsResponse(logs=log_entries)
 
     # ============ Web UI Routes ============
 

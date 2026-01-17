@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.10
+  - python=3.11
   - pytest
   - pytest-asyncio
   - pytest-cov
@@ -24,7 +24,7 @@ dependencies:
   - rich             # Rich text and formatting for terminal
   - pip:
       - pyjwt
-      - reflex
+      - reflex>=0.8.25,<0.9
       # PDF Processing
       - pdfplumber       # Primary PDF text extraction
       - pypdf            # Fallback PDF processing

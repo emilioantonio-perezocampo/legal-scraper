@@ -1,26 +1,25 @@
 """
-CAS GUI Bridge Actor.
+DOF GUI Bridge Actor.
 
-Connects the GUI layer to the CAS coordinator actor,
+Connects the GUI layer to the DOF (Diario Oficial de la Federación) scraper,
 providing a clean interface for starting, monitoring,
-and controlling CAS scraping jobs.
+and controlling DOF scraping jobs.
 """
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Callable, Awaitable, Dict, Any
 from datetime import datetime, timezone
 import uuid
 
-from src.infrastructure.actors.cas_base_actor import CASBaseActor
-
 
 @dataclass
-class CASGuiConfig:
-    """Configuration for CAS GUI scraping jobs."""
-    year_from: Optional[int] = None
-    year_to: Optional[int] = None
-    sport: Optional[str] = None
-    matter: Optional[str] = None
-    max_results: int = 100
+class DOFGuiConfig:
+    """Configuration for DOF GUI scraping jobs."""
+    mode: str = "today"  # "today" or "range"
+    start_date: Optional[str] = None  # YYYY-MM-DD format
+    end_date: Optional[str] = None  # YYYY-MM-DD format
+    section: Optional[str] = None  # primera, segunda, tercera, etc.
+    download_pdfs: bool = True
+    output_directory: str = "dof_data"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -28,28 +27,27 @@ class CASGuiConfig:
 
 
 @dataclass
-class CASJobStarted:
-    """Event emitted when a CAS job starts."""
+class DOFJobStarted:
+    """Event emitted when a DOF job starts."""
     job_id: str
     timestamp: str
-    filters: Dict[str, Any]
+    config: Dict[str, Any]
 
 
 @dataclass
-class CASJobProgress:
-    """Event emitted for CAS job progress updates."""
+class DOFJobProgress:
+    """Event emitted for DOF job progress updates."""
     job_id: str
     estado: str
-    descubiertos: int
-    descargados: int
-    procesados: int
+    total_documents: int
+    processed_documents: int
     errores: int
     porcentaje: float
 
 
 @dataclass
-class CASJobCompleted:
-    """Event emitted when a CAS job completes."""
+class DOFJobCompleted:
+    """Event emitted when a DOF job completes."""
     job_id: str
     timestamp: str
     estadisticas: Dict[str, Any]
@@ -57,20 +55,20 @@ class CASJobCompleted:
 
 
 @dataclass
-class CASJobError:
-    """Event emitted when a CAS job encounters an error."""
+class DOFJobError:
+    """Event emitted when a DOF job encounters an error."""
     job_id: str
     timestamp: str
     mensaje: str
     recuperable: bool
 
 
-class CASGuiBridgeActor(CASBaseActor):
+class DOFGuiBridgeActor:
     """
-    Bridge actor connecting GUI to CAS coordinator.
+    Bridge actor connecting GUI to DOF scraper.
 
     Provides a simple interface for:
-    - Starting scraping jobs with filters
+    - Starting scraping jobs with date/section filters
     - Monitoring job progress
     - Pausing, resuming, and stopping jobs
     - Receiving event callbacks for UI updates
@@ -79,16 +77,15 @@ class CASGuiBridgeActor(CASBaseActor):
     def __init__(
         self,
         on_event: Optional[Callable[[Any], Awaitable[None]]] = None,
-        output_dir: str = "cas_data",
+        output_dir: str = "dof_data",
     ):
         """
-        Initialize the CAS GUI bridge actor.
+        Initialize the DOF GUI bridge actor.
 
         Args:
             on_event: Async callback for job events
             output_dir: Directory for output files
         """
-        super().__init__()
         self._on_event = on_event
         self._output_dir = output_dir
         self._current_job_id: Optional[str] = None
@@ -99,9 +96,9 @@ class CASGuiBridgeActor(CASBaseActor):
         if self._on_event:
             await self._on_event(event)
 
-    async def start_job(self, config: CASGuiConfig) -> str:
+    async def start_job(self, config: DOFGuiConfig) -> str:
         """
-        Start a new CAS scraping job.
+        Start a new DOF scraping job.
 
         Args:
             config: Configuration for the job
@@ -110,35 +107,26 @@ class CASGuiBridgeActor(CASBaseActor):
             Job ID for tracking
         """
         # Generate unique job ID
-        job_id = f"cas-gui-{uuid.uuid4().hex[:8]}"
+        job_id = f"dof-gui-{uuid.uuid4().hex[:8]}"
         self._current_job_id = job_id
 
-        # Build filters from config
-        filters = {}
-        if config.year_from:
-            filters["year_from"] = config.year_from
-        if config.year_to:
-            filters["year_to"] = config.year_to
-        if config.sport:
-            filters["sport"] = config.sport
-        if config.matter:
-            filters["matter"] = config.matter
-        filters["max_results"] = config.max_results
+        # Build config dict
+        config_dict = config.to_dict()
 
         # Emit started event
-        event = CASJobStarted(
+        event = DOFJobStarted(
             job_id=job_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
-            filters=filters,
+            config=config_dict,
         )
         await self._emit_event(event)
 
-        # Send message to coordinator to start the job
+        # Send message to coordinator to start the job (if connected)
         if self._coordinator:
             await self._coordinator.tell({
                 "type": "start_job",
                 "job_id": job_id,
-                "filters": filters,
+                "config": config_dict,
                 "output_dir": self._output_dir,
             })
 
@@ -178,19 +166,18 @@ class CASGuiBridgeActor(CASBaseActor):
         job_id = event.get("job_id", self._current_job_id)
 
         if event_type == "progress":
-            gui_event = CASJobProgress(
+            gui_event = DOFJobProgress(
                 job_id=job_id,
                 estado=event.get("estado", "DESCONOCIDO"),
-                descubiertos=event.get("descubiertos", 0),
-                descargados=event.get("descargados", 0),
-                procesados=event.get("procesados", 0),
+                total_documents=event.get("total_documents", 0),
+                processed_documents=event.get("processed_documents", 0),
                 errores=event.get("errores", 0),
                 porcentaje=event.get("porcentaje", 0.0),
             )
             await self._emit_event(gui_event)
 
         elif event_type == "completed":
-            gui_event = CASJobCompleted(
+            gui_event = DOFJobCompleted(
                 job_id=job_id,
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 estadisticas=event.get("estadisticas", {}),
@@ -199,7 +186,7 @@ class CASGuiBridgeActor(CASBaseActor):
             await self._emit_event(gui_event)
 
         elif event_type == "error":
-            gui_event = CASJobError(
+            gui_event = DOFJobError(
                 job_id=job_id,
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 mensaje=event.get("mensaje", "Error desconocido"),

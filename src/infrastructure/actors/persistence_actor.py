@@ -3,11 +3,17 @@ SCJN Persistence Actor
 
 Persists documents and embeddings for the SCJN scraper.
 Implements ISCJNDocumentRepository and IEmbeddingRepository interfaces.
+
+Supports optional Supabase integration when configured via environment variables:
+- ENABLE_SUPABASE_PERSISTENCE: Enable Supabase backend
+- ENABLE_DUAL_WRITE: Write to both JSON and Supabase (default: true when Supabase enabled)
 """
 import json
 import asyncio
+import logging
+import os
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from datetime import date
 
 from .base import BaseActor
@@ -28,6 +34,18 @@ from src.domain.scjn_value_objects import (
     DocumentStatus,
     SubjectMatter,
 )
+
+# Supabase integration imports (optional)
+try:
+    from src.infrastructure.adapters.supabase_repository import SupabaseDocumentRepository
+    from src.infrastructure.supabase_settings import SupabaseSettings
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
+    SupabaseDocumentRepository = None
+    SupabaseSettings = None
+
+logger = logging.getLogger(__name__)
 
 
 class SCJNPersistenceActor(BaseActor):
@@ -62,12 +80,47 @@ class SCJNPersistenceActor(BaseActor):
         self._embeddings: List[DocumentEmbedding] = []
         self._lock = asyncio.Lock()
 
+        # Supabase configuration
+        self._supabase_enabled = (
+            os.environ.get("ENABLE_SUPABASE_PERSISTENCE", "false").lower() == "true"
+        )
+        self._dual_write_enabled = (
+            os.environ.get("ENABLE_DUAL_WRITE", "true").lower() == "true"
+        )
+        self._supabase_repo: Optional[Any] = None
+        self._supabase_client: Optional[Any] = None
+
     async def start(self):
         """Start the actor and create directories."""
         await super().start()
         self._documents_dir.mkdir(parents=True, exist_ok=True)
         self._embeddings_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initialize Supabase if enabled
+        if self._supabase_enabled and SUPABASE_AVAILABLE:
+            await self._init_supabase()
+
         await self._load_existing_documents()
+
+    async def _init_supabase(self) -> None:
+        """Initialize Supabase client and repository."""
+        try:
+            settings = SupabaseSettings.from_env()
+
+            # Import supabase client lazily
+            from supabase import create_client
+
+            self._supabase_client = create_client(
+                settings.url, settings.service_role_key
+            )
+            self._supabase_repo = SupabaseDocumentRepository(
+                client=self._supabase_client
+            )
+            logger.info("Supabase persistence initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Supabase: {e}. Falling back to JSON only.")
+            self._supabase_enabled = False
+            self._supabase_repo = None
 
     async def handle_message(self, message):
         """Handle incoming messages."""
@@ -88,7 +141,7 @@ class SCJNPersistenceActor(BaseActor):
                 return self._documents.get(doc_id) if doc_id else None
 
             elif cmd == "EXISTS" and len(message) >= 2:
-                return message[1] in self._q_param_index
+                return await self._check_exists(message[1])
 
             elif cmd == "LIST_DOCUMENTS":
                 return tuple(self._documents.keys())
@@ -97,6 +150,27 @@ class SCJNPersistenceActor(BaseActor):
                 return len(self._embeddings)
 
         return None
+
+    async def _check_exists(self, q_param: str) -> bool:
+        """
+        Check if a document exists by q_param.
+
+        Checks local cache first, then Supabase if enabled.
+        """
+        # Check local cache first
+        if q_param in self._q_param_index:
+            return True
+
+        # Check Supabase if enabled
+        if self._supabase_enabled and self._supabase_repo:
+            try:
+                return await self._supabase_repo.exists(
+                    external_id=q_param, source_type="scjn"
+                )
+            except Exception as e:
+                logger.warning(f"Supabase exists check failed: {e}")
+
+        return False
 
     async def _load_existing_documents(self) -> None:
         """Load all existing document files from directory."""
@@ -177,20 +251,54 @@ class SCJNPersistenceActor(BaseActor):
     async def _save_document(
         self, document: SCJNDocument, correlation_id: str
     ) -> DocumentoGuardado:
-        """Save document to file and memory."""
+        """
+        Save document to storage backends.
+
+        Supports three modes:
+        1. JSON only (default): Save to local JSON files
+        2. Supabase only: Save to Supabase database
+        3. Dual-write: Save to both JSON and Supabase (safest for migration)
+
+        Falls back to JSON if Supabase fails.
+        """
         async with self._lock:
             # Store in memory
             self._documents[document.id] = document
             self._q_param_index[document.q_param] = document.id
 
-            # Serialize to file
-            data = self._serialize_document(document)
-            file_path = self._documents_dir / f"{document.id}.json"
+            supabase_success = False
 
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None, lambda: file_path.write_text(json.dumps(data, indent=2))
+            # Try Supabase first if enabled
+            if self._supabase_enabled and self._supabase_repo:
+                try:
+                    await self._supabase_repo.save_document(
+                        document, source_type="scjn"
+                    )
+                    supabase_success = True
+                    logger.debug(f"Saved document {document.id} to Supabase")
+                except Exception as e:
+                    logger.warning(f"Supabase save failed for {document.id}: {e}")
+                    # Will fall back to JSON
+
+            # Save to JSON if:
+            # - Supabase is disabled, OR
+            # - Dual-write is enabled, OR
+            # - Supabase failed
+            should_save_json = (
+                not self._supabase_enabled
+                or self._dual_write_enabled
+                or not supabase_success
             )
+
+            if should_save_json:
+                data = self._serialize_document(document)
+                file_path = self._documents_dir / f"{document.id}.json"
+
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None, lambda: file_path.write_text(json.dumps(data, indent=2))
+                )
+                logger.debug(f"Saved document {document.id} to JSON")
 
             return DocumentoGuardado(
                 correlation_id=correlation_id,
