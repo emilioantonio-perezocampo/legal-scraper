@@ -19,6 +19,9 @@ dev.scraper.lexconnect.app {
     reverse_proxy /api/* api:8000
     reverse_proxy /downloads/* api:8000
 
-    # 4. Default route to Reflex UI
+    # 4. Reflex WebSocket backend (port 8000)
+    reverse_proxy /_event* ui:8000
+
+    # 5. Default route to Reflex UI frontend (port 3000)
     reverse_proxy ui:3000
 }

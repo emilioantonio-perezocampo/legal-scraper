@@ -19,6 +19,7 @@ ENV TZ=Etc/UTC
 # libxrender1, libxtst6: Common GUI rendering deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
+    curl \
     unzip \
     python3-tk \
     libx11-6 \
@@ -26,10 +27,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender1 \
     libxtst6 \
     tk-dev \
-    nodejs \
-    npm \
+    ca-certificates \
+    gnupg \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20 LTS from NodeSource (required for Reflex)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------

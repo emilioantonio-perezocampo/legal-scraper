@@ -24,6 +24,22 @@ from .bjv_bridge import (
     BJVJobCompleted,
     BJVJobFailed,
 )
+from .cas_gui_bridge import (
+    CASGuiBridgeActor,
+    CASGuiConfig,
+    CASJobStarted,
+    CASJobProgress,
+    CASJobCompleted,
+    CASJobError,
+)
+from .dof_gui_bridge import (
+    DOFGuiBridgeActor,
+    DOFGuiConfig,
+    DOFJobStarted,
+    DOFJobProgress,
+    DOFJobCompleted,
+    DOFJobError,
+)
 
 __all__ = [
     'GuiStateActor',
@@ -43,4 +59,16 @@ __all__ = [
     'BJVJobProgress',
     'BJVJobCompleted',
     'BJVJobFailed',
+    'CASGuiBridgeActor',
+    'CASGuiConfig',
+    'CASJobStarted',
+    'CASJobProgress',
+    'CASJobCompleted',
+    'CASJobError',
+    'DOFGuiBridgeActor',
+    'DOFGuiConfig',
+    'DOFJobStarted',
+    'DOFJobProgress',
+    'DOFJobCompleted',
+    'DOFJobError',
 ]
