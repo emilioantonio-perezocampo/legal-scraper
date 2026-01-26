@@ -1,27 +1,16 @@
-# Caddyfile for Hetzner Deployment
+# Caddyfile for Internal Routing
+# SSL/TLS is handled by Kong - this serves as internal router only
 
-# 1. Replace with your actual domain or Public IP.
-#    If using an IP, automatic HTTPS might fail or use self-signed certs.
-dev.scraper.lexconnect.app {
+:80 {
     encode gzip
-    tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-    }
 
-    # 2. Optional extra layer with Basic Authentication (app-level auth is required).
-    #    Generate a new hash with:
-    #    docker run --rm caddy caddy hash-password --plaintext YOUR_NEW_PASSWORD
-    # basicauth /* {
-    #     admin $2a$14$replace_this_hash
-    # }
-
-    # 3. Route API + downloads to FastAPI
+    # API routes to FastAPI backend
     reverse_proxy /api/* api:8000
     reverse_proxy /downloads/* api:8000
 
-    # 4. Reflex WebSocket backend (port 8000)
-    reverse_proxy /_event* ui:8000
+    # Reflex WebSocket backend (the UI runs both frontend on 3000 and backend on 8000)
+    reverse_proxy /_event* legal-scraper-ui:8000
 
-    # 5. Default route to Reflex UI frontend (port 3000)
-    reverse_proxy ui:3000
+    # Default route to Reflex UI frontend
+    reverse_proxy legal-scraper-ui:3000
 }

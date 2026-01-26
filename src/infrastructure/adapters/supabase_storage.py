@@ -127,7 +127,15 @@ class SupabaseStorageAdapter:
         Returns:
             Storage path of the uploaded file
         """
-        extension = ".pdf" if content_type == "application/pdf" else ".html"
+        # Map MIME type to extension
+        extension_map = {
+            "application/pdf": ".pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+            "application/msword": ".doc",
+            "text/html": ".html",
+        }
+        extension = extension_map.get(content_type, ".pdf")
+
         path = self._generate_path(
             source_type=source_type,
             doc_id=doc_id,

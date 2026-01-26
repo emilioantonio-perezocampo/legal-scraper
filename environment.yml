@@ -35,8 +35,11 @@ dependencies:
       - tiktoken         # Token counting for chunking
       # Browser Automation
       - playwright       # Headless browser for dynamic sites (CAS)
+      - crawl4ai         # LLM-powered web scraping for BJV
       # Retry & Resilience
       - tenacity         # Retry logic with backoff
       # LLM Scraping (OpenRouter)
       - instructor>=1.0.0    # Structured LLM extraction with Pydantic
       - openai>=1.0.0        # OpenRouter compatibility layer
+      # Temporal Integration (document embedding workflows)
+      - temporalio>=1.7.0    # Temporal workflow SDK

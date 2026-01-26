@@ -77,7 +77,7 @@ class OpenRouterClient:
         schema: Type[T],
         instruction: str,
         model: Optional[str] = None,
-        max_tokens: int = 4096
+        max_tokens: int = 16384  # Increased for larger JSON outputs
     ) -> Optional[T]:
         """
         Extract structured data from content using LLM.
