@@ -1,0 +1,84 @@
+services:
+  crawlab-mongo:
+    image: mongo:4.4
+    container_name: crawlab-mongo
+    restart: always
+    volumes:
+      - crawlab_mongo_data:/data/db
+    networks:
+      - default
+      - legaltracking-dev_default
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.runCommand('ping').ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  crawlab-master:
+    image: crawlabteam/crawlab:latest
+    container_name: crawlab-master
+    restart: always
+    environment:
+      - CRAWLAB_NODE_MASTER=Y
+      - CRAWLAB_MONGO_HOST=crawlab-mongo
+      - CRAWLAB_MONGO_PORT=27017
+      - CRAWLAB_MONGO_DB=crawlab
+      - TZ=America/Mexico_City
+      # Legal-scraper API connection
+      - LEGAL_SCRAPER_API_URL=http://api:8000
+    volumes:
+      - crawlab_master_data:/root/.crawlab
+      - ./crawlab_spiders:/app/spiders
+    expose:
+      - "8080"
+    networks:
+      - default
+      - legaltracking-dev_default
+    depends_on:
+      crawlab-mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Auto-login bridge for Authentik SSO -> Crawlab session
+  crawlab-auth-bridge:
+    build:
+      context: ../repos/legalconnect-infra/crawlab-auth-bridge
+      dockerfile: Dockerfile
+    container_name: crawlab-auth-bridge
+    restart: always
+    environment:
+      - MONGO_URI=mongodb://crawlab-mongo:27017
+      - CRAWLAB_UPSTREAM=http://crawlab-master:8080
+      - JWT_SECRET=Crawlab2021!
+      - LISTEN_ADDR=:8081
+    expose:
+      - "8081"
+    networks:
+      - default
+      - legaltracking-dev_default
+    depends_on:
+      crawlab-master:
+        condition: service_healthy
+      crawlab-mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8081/health || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  crawlab_mongo_data:
+  crawlab_master_data:
+
+networks:
+  default:
+  legaltracking-dev_default:
+    external: true
