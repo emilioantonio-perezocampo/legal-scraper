@@ -27,3 +27,9 @@ services:
     # Overridable command
     # Run: "docker compose run --rm app python tests/container_smoke_test.py"
     command: python src/main.py
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

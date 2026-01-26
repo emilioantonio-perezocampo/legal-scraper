@@ -4,14 +4,36 @@ services:
     image: legal-scraper:latest
     container_name: legal-scraper-api
     restart: always
+    networks:
+      - default
+      - legaltracking-dev_default
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=America/Mexico_City
+      - PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
       - SCRAPER_AUTH_USERNAME=${SCRAPER_AUTH_USERNAME}
       - SCRAPER_AUTH_PASSWORD_HASH=${SCRAPER_AUTH_PASSWORD_HASH}
       - SCRAPER_AUTH_JWT_SECRET=${SCRAPER_AUTH_JWT_SECRET}
       - SCRAPER_AUTH_TOKEN_TTL_MINUTES=${SCRAPER_AUTH_TOKEN_TTL_MINUTES:-60}
       - SCRAPER_AUTH_COOKIE_SECURE=${SCRAPER_AUTH_COOKIE_SECURE:-true}
+      # Disable auth for internal Crawlab spider access
+      - SCRAPER_AUTH_DISABLED=${SCRAPER_AUTH_DISABLED:-false}
+      # Temporal integration for document embedding processing
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-temporal-1:7233}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
+      - TEMPORAL_TASK_QUEUE=${TEMPORAL_TASK_QUEUE:-legalconnect-meeting}
+      - TEMPORAL_ENABLED=${TEMPORAL_ENABLED:-true}
+      # Supabase persistence
+      - ENABLE_SUPABASE_PERSISTENCE=${ENABLE_SUPABASE_PERSISTENCE:-false}
+      - ENABLE_DUAL_WRITE=${ENABLE_DUAL_WRITE:-true}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_DB_HOST=${SUPABASE_DB_HOST}
+      - SUPABASE_DB_PORT=${SUPABASE_DB_PORT:-5432}
+      - SUPABASE_DB_NAME=${SUPABASE_DB_NAME:-postgres}
+      - SUPABASE_DB_PASSWORD=${SUPABASE_DB_PASSWORD}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     volumes:
       - ./scraped_data:/app/scraped_data
       - ./scjn_data:/app/scjn_data
@@ -20,6 +42,46 @@ services:
     command: python src/gui/launcher.py --mode web --host 0.0.0.0 --port 8000
     expose:
       - "8000"
+    healthcheck:
+      test: ["CMD-SHELL", "pidof python || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  scraper-worker:
+    build: .
+    image: legal-scraper:latest
+    container_name: legal-scraper-worker
+    restart: always
+    networks:
+      - default
+      - legaltracking-dev_default
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=America/Mexico_City
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-temporal-1:7233}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
+      - TEMPORAL_TASK_QUEUE=${TEMPORAL_TASK_QUEUE:-scraper-pipeline}
+      - LEGAL_SCRAPER_API_URL=http://api:8000
+      # Supabase persistence for embeddings
+      - ENABLE_SUPABASE_PERSISTENCE=${ENABLE_SUPABASE_PERSISTENCE:-false}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_DB_HOST=${SUPABASE_DB_HOST}
+      - SUPABASE_DB_PORT=${SUPABASE_DB_PORT:-5432}
+      - SUPABASE_DB_NAME=${SUPABASE_DB_NAME:-postgres}
+      - SUPABASE_DB_PASSWORD=${SUPABASE_DB_PASSWORD}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+    command: python -m src.gui.infrastructure.scraper_worker
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD-SHELL", "pidof python || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   ui:
     build: .
@@ -27,13 +89,23 @@ services:
     container_name: legal-scraper-ui
     restart: always
     working_dir: /app/reflex_ui
+    networks:
+      - default
+      - legaltracking-dev_default
     environment:
       - SCRAPER_API_BASE_URL=http://api:8000
     command: reflex run --env prod
     expose:
       - "3000"
+      - "8000"
     depends_on:
       - api
+    healthcheck:
+      test: ["CMD-SHELL", "pidof python || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   caddy:
     build:
@@ -42,19 +114,30 @@ services:
     image: legal-scraper-caddy:latest
     container_name: caddy
     restart: always
-    environment:
-      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
-    ports:
-      - "${SCRAPER_HTTP_PORT:-80}:80"
-      - "${SCRAPER_HTTPS_PORT:-443}:443"
+    networks:
+      - default
+      - legaltracking-dev_default
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
       - caddy_config:/config
+    expose:
+      - "80"
     depends_on:
       - api
       - ui
+    healthcheck:
+      test: ["CMD-SHELL", "pidof caddy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
 volumes:
   caddy_data:
   caddy_config:
+
+networks:
+  default:
+  legaltracking-dev_default:
+    external: true

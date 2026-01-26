@@ -14,8 +14,11 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional, List, Any, AsyncGenerator
+import logging
+
+logger = logging.getLogger(__name__)
 from contextlib import asynccontextmanager
 from pathlib import Path
 from dataclasses import dataclass
@@ -76,6 +79,7 @@ from src.gui.web.auth import (
     decode_access_token,
     verify_password,
 )
+from src.gui.infrastructure.temporal_client import get_temporal_client
 
 
 @dataclass
@@ -318,6 +322,72 @@ class DOFSectionsResponse(BaseModel):
     modes: List[dict]
 
 
+class EmbeddingStatusResponse(BaseModel):
+    """Response model for embedding workflow status."""
+    job_id: str
+    workflow_status: Optional[str] = None
+    embedding_status: str = "unknown"
+
+
+# =============================================================================
+# n8n Webhook Integration Models
+# =============================================================================
+
+class N8nPipelineTriggerRequest(BaseModel):
+    """Request model for n8n to trigger a scraper pipeline."""
+    source: str = Field(..., description="Scraper source: scjn, bjv, cas, dof")
+    max_results: int = Field(default=100, ge=1, le=1000)
+    callback_url: Optional[str] = Field(default=None, description="n8n webhook URL for completion notification")
+    # Source-specific options
+    category: Optional[str] = None  # SCJN
+    scope: Optional[str] = None  # SCJN
+    search_term: Optional[str] = None  # BJV
+    area: Optional[str] = None  # BJV
+    year_from: Optional[int] = None  # CAS
+    year_to: Optional[int] = None  # CAS
+    sport: Optional[str] = None  # CAS
+    matter: Optional[str] = None  # CAS
+    mode: str = "today"  # DOF
+    start_date: Optional[str] = None  # DOF
+    end_date: Optional[str] = None  # DOF
+    section: Optional[str] = None  # DOF
+
+
+class N8nPipelineTriggerResponse(BaseModel):
+    """Response model for pipeline trigger."""
+    success: bool
+    workflow_id: Optional[str] = None
+    message: str
+    source: str
+
+
+class N8nPipelineStatusRequest(BaseModel):
+    """Request for pipeline status."""
+    workflow_id: str
+
+
+class N8nPipelineStatusResponse(BaseModel):
+    """Response model for pipeline status."""
+    workflow_id: str
+    status: str  # RUNNING, COMPLETED, FAILED, CANCELLED, TIMED_OUT
+    source: Optional[str] = None
+    downloaded_count: int = 0
+    error_count: int = 0
+    embedding_workflow_id: Optional[str] = None
+
+
+class N8nCallbackPayload(BaseModel):
+    """Payload sent to n8n callback webhook on pipeline completion."""
+    event: str = "pipeline_completed"
+    workflow_id: str
+    source: str
+    status: str
+    downloaded_count: int
+    error_count: int
+    embedding_workflow_id: Optional[str] = None
+    timestamp: str
+
+
 class ScraperAPI:
     """
     Orchestrator class for the Web API.
@@ -339,6 +409,9 @@ class ScraperAPI:
         self._cas_logs: List[dict] = []
         self._dof_bridge: Optional[DOFGuiBridgeActor] = None
         self._dof_logs: List[dict] = []
+        self._temporal_client = get_temporal_client()
+        # n8n callback URL storage: workflow_id -> callback_url
+        self._n8n_callbacks: dict[str, str] = {}
 
     @property
     def service(self) -> ScraperService:
@@ -454,6 +527,13 @@ class ScraperAPI:
                 "source": "SCJN",
                 "timestamp": event.timestamp.isoformat()
             })
+            # Trigger embedding workflow for completed documents
+            if hasattr(event, 'total_downloaded') and event.total_downloaded > 0:
+                await self._trigger_embedding_workflow(
+                    job_id=str(event.job_id),
+                    source_type="scjn",
+                    document_count=event.total_downloaded,
+                )
         elif isinstance(event, SCJNJobFailed):
             self._scjn_logs.append({
                 "level": "error",
@@ -486,6 +566,13 @@ class ScraperAPI:
                 "source": "BJV",
                 "timestamp": event.timestamp.isoformat()
             })
+            # Trigger embedding workflow for completed documents
+            if hasattr(event, 'total_libros_descargados') and event.total_libros_descargados > 0:
+                await self._trigger_embedding_workflow(
+                    job_id=str(event.job_id),
+                    source_type="bjv",
+                    document_count=event.total_libros_descargados,
+                )
         elif isinstance(event, BJVJobFailed):
             self._bjv_logs.append({
                 "level": "error",
@@ -518,6 +605,13 @@ class ScraperAPI:
                 "source": "CAS",
                 "timestamp": event.timestamp
             })
+            # Trigger embedding workflow for completed documents
+            # CAS doesn't provide document count, use default estimate
+            await self._trigger_embedding_workflow(
+                job_id=str(event.job_id),
+                source_type="cas",
+                document_count=50,  # Default estimate for CAS jobs
+            )
         elif isinstance(event, CASJobError):
             self._cas_logs.append({
                 "level": "error",
@@ -550,6 +644,15 @@ class ScraperAPI:
                 "source": "DOF",
                 "timestamp": event.timestamp
             })
+            # Trigger embedding workflow for completed documents
+            stats = getattr(event, 'estadisticas', {}) or {}
+            doc_count = stats.get("documents_saved", 0)
+            if doc_count > 0:
+                await self._trigger_embedding_workflow(
+                    job_id=str(event.job_id),
+                    source_type="dof",
+                    document_count=doc_count,
+                )
         elif isinstance(event, DOFJobError):
             self._dof_logs.append({
                 "level": "error",
@@ -578,6 +681,80 @@ class ScraperAPI:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
                 pass  # Skip if queue is full
+
+    async def _trigger_embedding_workflow(
+        self,
+        job_id: str,
+        source_type: str,
+        document_count: int,
+    ) -> None:
+        """Trigger embedding workflow for completed scraper job."""
+        try:
+            run_id = await self._temporal_client.trigger_embedding_workflow(
+                job_id=job_id,
+                source_type=source_type,
+                document_count=document_count,
+            )
+            if run_id:
+                log_entry = {
+                    "level": "info",
+                    "message": f"Started embedding workflow for {document_count} documents",
+                    "source": source_type.upper(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                logs = getattr(self, f"_{source_type}_logs", self._dof_logs)
+                logs.append(log_entry)
+        except Exception as e:
+            logger.warning(f"Failed to trigger embedding workflow: {e}")
+
+    async def send_n8n_callback(
+        self,
+        workflow_id: str,
+        source: str,
+        status: str,
+        downloaded_count: int = 0,
+        error_count: int = 0,
+        embedding_workflow_id: Optional[str] = None,
+    ) -> bool:
+        """Send completion notification to n8n webhook."""
+        callback_url = self._n8n_callbacks.pop(workflow_id, None)
+        if not callback_url:
+            return False
+
+        import aiohttp
+
+        payload = N8nCallbackPayload(
+            workflow_id=workflow_id,
+            source=source,
+            status=status,
+            downloaded_count=downloaded_count,
+            error_count=error_count,
+            embedding_workflow_id=embedding_workflow_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    callback_url,
+                    json=payload.model_dump(),
+                    headers={"Content-Type": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status < 400:
+                        logger.info(f"n8n callback sent successfully for {workflow_id}")
+                        return True
+                    else:
+                        logger.warning(f"n8n callback failed: {resp.status}")
+                        return False
+        except Exception as e:
+            logger.warning(f"n8n callback error: {e}")
+            return False
+
+    def register_n8n_callback(self, workflow_id: str, callback_url: str) -> None:
+        """Register a callback URL for a workflow."""
+        self._n8n_callbacks[workflow_id] = callback_url
+        logger.info(f"Registered n8n callback for {workflow_id}")
 
 
 def create_app(service: Optional[ScraperService] = None) -> FastAPI:
@@ -639,6 +816,282 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
         return HealthResponse(
             status="healthy" if api.service.is_running else "unhealthy"
         )
+
+    @app.get(
+        "/api/embedding-status/{job_id}",
+        response_model=EmbeddingStatusResponse,
+        tags=["Embedding"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_embedding_status(job_id: str):
+        """Get embedding processing status for a scraper job."""
+        workflow_status = await api._temporal_client.get_workflow_status(job_id)
+
+        return EmbeddingStatusResponse(
+            job_id=job_id,
+            workflow_status=workflow_status.get("status") if workflow_status else None,
+            embedding_status="running" if workflow_status else "pending",
+        )
+
+    # ============ n8n Webhook Integration ============
+
+    @app.post(
+        "/api/n8n/trigger-pipeline",
+        response_model=N8nPipelineTriggerResponse,
+        tags=["n8n Integration"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def n8n_trigger_pipeline(request: N8nPipelineTriggerRequest):
+        """
+        Webhook endpoint for n8n to trigger a scraper pipeline via Temporal.
+
+        This starts a ScraperPipelineWorkflow that:
+        1. Starts the scraper job
+        2. Polls until completion
+        3. Triggers embedding workflow
+        4. Optionally notifies n8n via callback_url
+        """
+        from temporalio.client import Client
+
+        source = request.source.lower()
+        if source not in ["scjn", "bjv", "cas", "dof"]:
+            return N8nPipelineTriggerResponse(
+                success=False,
+                message=f"Invalid source: {source}. Must be one of: scjn, bjv, cas, dof",
+                source=source,
+            )
+
+        # Build workflow config
+        config = {
+            "source": source,
+            "max_results": request.max_results,
+        }
+
+        # Add source-specific options
+        if source == "scjn":
+            if request.category:
+                config["category"] = request.category
+            if request.scope:
+                config["scope"] = request.scope
+        elif source == "bjv":
+            if request.search_term:
+                config["search_term"] = request.search_term
+            if request.area:
+                config["area"] = request.area
+        elif source == "cas":
+            if request.year_from:
+                config["year_from"] = request.year_from
+            if request.year_to:
+                config["year_to"] = request.year_to
+            if request.sport:
+                config["sport"] = request.sport
+            if request.matter:
+                config["matter"] = request.matter
+        elif source == "dof":
+            config["mode"] = request.mode
+            if request.start_date:
+                config["start_date"] = request.start_date
+            if request.end_date:
+                config["end_date"] = request.end_date
+            if request.section:
+                config["section"] = request.section
+
+        try:
+            # Get Temporal client
+            temporal_address = os.environ.get("TEMPORAL_ADDRESS", "temporal-temporal-1:7233")
+            namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")
+            task_queue = os.environ.get("TEMPORAL_TASK_QUEUE", "scraper-pipeline")
+
+            client = await Client.connect(temporal_address, namespace=namespace)
+
+            # Generate workflow ID
+            import time
+            workflow_id = f"{source}-n8n-{int(time.time())}"
+
+            # Import and start the workflow
+            from src.gui.infrastructure.scraper_pipeline import ScraperPipelineWorkflow
+
+            # Add callback URL to config for workflow to use
+            if request.callback_url:
+                config["callback_url"] = request.callback_url
+
+            handle = await client.start_workflow(
+                ScraperPipelineWorkflow.run,
+                args=[config],
+                id=workflow_id,
+                task_queue=task_queue,
+            )
+
+            return N8nPipelineTriggerResponse(
+                success=True,
+                workflow_id=workflow_id,
+                message=f"Started {source} pipeline workflow",
+                source=source,
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to trigger pipeline: {e}")
+            return N8nPipelineTriggerResponse(
+                success=False,
+                message=f"Failed to start pipeline: {str(e)}",
+                source=source,
+            )
+
+    @app.get(
+        "/api/n8n/pipeline-status/{workflow_id}",
+        response_model=N8nPipelineStatusResponse,
+        tags=["n8n Integration"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def n8n_pipeline_status(workflow_id: str):
+        """
+        Get the status of a scraper pipeline workflow.
+
+        Returns workflow status including downloaded/error counts.
+        """
+        from temporalio.client import Client
+
+        try:
+            temporal_address = os.environ.get("TEMPORAL_ADDRESS", "temporal-temporal-1:7233")
+            namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")
+
+            client = await Client.connect(temporal_address, namespace=namespace)
+            handle = client.get_workflow_handle(workflow_id)
+            desc = await handle.describe()
+
+            # Try to get result if completed
+            result = None
+            if desc.status.name == "COMPLETED":
+                try:
+                    result = await handle.result()
+                except Exception:
+                    pass
+
+            return N8nPipelineStatusResponse(
+                workflow_id=workflow_id,
+                status=desc.status.name,
+                source=result.get("source") if result else None,
+                downloaded_count=result.get("downloaded_count", 0) if result else 0,
+                error_count=result.get("error_count", 0) if result else 0,
+                embedding_workflow_id=result.get("embedding_workflow_id") if result else None,
+            )
+
+        except Exception as e:
+            return N8nPipelineStatusResponse(
+                workflow_id=workflow_id,
+                status=f"ERROR: {str(e)}",
+            )
+
+    @app.get(
+        "/api/n8n/list-pipelines",
+        tags=["n8n Integration"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def n8n_list_pipelines(
+        source: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 20,
+    ):
+        """
+        List recent pipeline workflows for monitoring.
+
+        Args:
+            source: Filter by source (scjn, bjv, cas, dof)
+            status: Filter by status (RUNNING, COMPLETED, FAILED)
+            limit: Maximum number of results
+        """
+        from temporalio.client import Client
+
+        try:
+            temporal_address = os.environ.get("TEMPORAL_ADDRESS", "temporal-temporal-1:7233")
+            namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")
+
+            client = await Client.connect(temporal_address, namespace=namespace)
+
+            # Build query for ScraperPipelineWorkflow
+            query = "WorkflowType = 'ScraperPipelineWorkflow'"
+            if status:
+                query += f" AND ExecutionStatus = '{status}'"
+
+            workflows = []
+            async for workflow in client.list_workflows(query=query):
+                # Filter by source if specified
+                if source and not workflow.id.startswith(f"{source}-"):
+                    continue
+
+                workflows.append({
+                    "workflow_id": workflow.id,
+                    "status": workflow.status.name,
+                    "start_time": workflow.start_time.isoformat() if workflow.start_time else None,
+                    "close_time": workflow.close_time.isoformat() if workflow.close_time else None,
+                })
+
+                if len(workflows) >= limit:
+                    break
+
+            return {"workflows": workflows, "count": len(workflows)}
+
+        except Exception as e:
+            return {"error": str(e), "workflows": [], "count": 0}
+
+    @app.post(
+        "/api/n8n/trigger-crawlab-spider",
+        tags=["n8n Integration"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def n8n_trigger_crawlab_spider(
+        spider_name: str,
+        callback_url: Optional[str] = None,
+    ):
+        """
+        Trigger a Crawlab spider run via its API.
+
+        This allows n8n to orchestrate Crawlab spiders directly.
+        """
+        import aiohttp
+
+        crawlab_api = os.environ.get("CRAWLAB_API_URL", "http://crawlab-master:8080")
+
+        # Map spider names to IDs (would need to be configured)
+        spider_map = {
+            "scjn": os.environ.get("CRAWLAB_SCJN_SPIDER_ID"),
+            "bjv": os.environ.get("CRAWLAB_BJV_SPIDER_ID"),
+            "cas": os.environ.get("CRAWLAB_CAS_SPIDER_ID"),
+            "dof": os.environ.get("CRAWLAB_DOF_SPIDER_ID"),
+        }
+
+        spider_id = spider_map.get(spider_name.lower())
+        if not spider_id:
+            return {
+                "success": False,
+                "error": f"Spider '{spider_name}' not configured. Set CRAWLAB_{spider_name.upper()}_SPIDER_ID",
+            }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Trigger spider run via Crawlab API
+                async with session.post(
+                    f"{crawlab_api}/api/spiders/{spider_id}/run",
+                    headers={"Content-Type": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return {
+                            "success": True,
+                            "task_id": data.get("data", {}).get("_id"),
+                            "message": f"Started Crawlab spider: {spider_name}",
+                        }
+                    else:
+                        text = await resp.text()
+                        return {
+                            "success": False,
+                            "error": f"Crawlab API error: {resp.status} - {text}",
+                        }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ============ End n8n Integration ============
 
     @app.post("/api/auth/login", response_model=LoginResponse, tags=["Auth"])
     async def login(request: LoginRequest, response: Response):

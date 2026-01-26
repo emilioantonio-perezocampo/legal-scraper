@@ -149,7 +149,7 @@ Look for patterns in the HTML like tables, divs with document listings, links wi
 
     def __init__(
         self,
-        model: str = "x-ai/grok-4.1-fast",
+        model: str = "google/gemini-3-flash-preview",  # Fast Gemini 3 Flash model
         rate_limit_delay: float = 2.0,
         api_key: Optional[str] = None
     ):
@@ -216,13 +216,13 @@ Look for patterns in the HTML like tables, divs with document listings, links wi
 
         logger.info(f"Fetched {len(html)} chars, extracting with {self.model}...")
 
-        # Extract using LLM
+        # Extract using LLM with higher max_tokens for full JSON output
         result = await self.llm.extract_from_html(
             html=html,
             schema=ExtractedSearchResults,
             instruction=self.EXTRACTION_INSTRUCTION,
             truncate_html=True,
-            max_html_chars=80000  # ~20k tokens input
+            max_html_chars=40000  # Reduced to avoid output truncation
         )
 
         if not result:
@@ -233,10 +233,32 @@ Look for patterns in the HTML like tables, divs with document listings, links wi
             logger.warning(f"No documents extracted from page {page}")
             return [], False
 
-        # Convert to domain entities
+        # Extract real q_params from HTML using regex as fallback
+        import re
+        real_q_params = re.findall(r'wfOrdenamientoDetalle\.aspx\?q=([A-Za-z0-9+/=]{20,})', html)
+        if not real_q_params:
+            # Try alternate pattern
+            real_q_params = re.findall(r'q=([A-Za-z0-9+/=]{30,})', html)
+
+        logger.info(f"Found {len(real_q_params)} real q_params via regex")
+
+        # Convert to domain entities, using real q_params when available
         documents = []
-        for doc in result.documents:
+        for i, doc in enumerate(result.documents):
             try:
+                # Use regex-extracted q_param if LLM didn't get a valid one
+                if real_q_params and i < len(real_q_params):
+                    if not doc.q_param or len(doc.q_param) < 10:
+                        doc = ExtractedDocument(
+                            title=doc.title,
+                            category=doc.category,
+                            scope=doc.scope,
+                            status=doc.status,
+                            publication_date=doc.publication_date,
+                            q_param=real_q_params[i],
+                            detail_url=f"https://legislacion.scjn.gob.mx/Buscador/Paginas/wfOrdenamientoDetalle.aspx?q={real_q_params[i]}"
+                        )
+
                 domain_doc = self._to_domain_entity(doc)
                 if domain_doc:
                     documents.append(domain_doc)

@@ -3,7 +3,13 @@ BJV Discovery Actor.
 
 Handles search and pagination to discover books in the
 Biblioteca Jurídica Virtual.
+
+Supports two modes:
+1. CSS parsing (legacy) - Direct HTTP fetch with BeautifulSoup
+2. LLM parsing (recommended) - Crawl4AI with LLM extraction for JS-rendered content
 """
+import logging
+import os
 import aiohttp
 from typing import Optional, Set
 from urllib.parse import urlencode, urljoin
@@ -22,6 +28,8 @@ from src.infrastructure.adapters.bjv_search_parser import (
     PaginacionInfo,
 )
 
+logger = logging.getLogger(__name__)
+
 
 BJV_BASE_URL = "https://biblio.juridicas.unam.mx"
 BJV_SEARCH_URL = f"{BJV_BASE_URL}/bjv/resultados"
@@ -31,6 +39,10 @@ USER_AGENT = "BJVScraper/1.0 (Educational Research)"
 class BJVDiscoveryActor(BJVBaseActor):
     """
     Actor for discovering books from BJV search.
+
+    Supports two modes:
+    - LLM mode (default): Uses Crawl4AI with LLM extraction for JS-rendered content
+    - CSS mode (fallback): Direct HTTP fetch with BeautifulSoup parsing
 
     Responsibilities:
     - Execute search queries
@@ -43,6 +55,7 @@ class BJVDiscoveryActor(BJVBaseActor):
         self,
         coordinator: BJVBaseActor,
         rate_limiter: BJVRateLimiter,
+        use_llm: bool = True,
     ):
         """
         Initialize the discovery actor.
@@ -50,6 +63,7 @@ class BJVDiscoveryActor(BJVBaseActor):
         Args:
             coordinator: Parent coordinator actor
             rate_limiter: Rate limiter for requests
+            use_llm: Use LLM-based extraction (recommended for JS content)
         """
         super().__init__(nombre="BJVDiscovery")
         self._coordinator = coordinator
@@ -58,6 +72,8 @@ class BJVDiscoveryActor(BJVBaseActor):
         self._discovered_ids: Set[str] = set()
         self._parser = BJVSearchParser()
         self._max_resultados = 100
+        self._use_llm = use_llm and bool(os.getenv("OPENROUTER_API_KEY"))
+        self._llm_parser = None
 
     async def start(self) -> None:
         """Start the actor and create HTTP session."""
@@ -67,6 +83,19 @@ class BJVDiscoveryActor(BJVBaseActor):
             timeout=timeout,
             headers={"User-Agent": USER_AGENT},
         )
+
+        # Initialize LLM parser if enabled
+        if self._use_llm:
+            try:
+                from src.infrastructure.adapters.bjv_llm_parser import BJVLLMParser
+                self._llm_parser = BJVLLMParser()
+                logger.info("BJV Discovery Actor started with LLM parser")
+            except ImportError as e:
+                logger.warning(f"LLM parser not available, falling back to CSS: {e}")
+                self._use_llm = False
+            except Exception as e:
+                logger.warning(f"Failed to initialize LLM parser: {e}")
+                self._use_llm = False
 
     async def stop(self) -> None:
         """Stop the actor and close HTTP session."""
@@ -91,7 +120,16 @@ class BJVDiscoveryActor(BJVBaseActor):
         self._max_resultados = msg.max_resultados
         self._discovered_ids.clear()
 
-        # Build search URL
+        # Use LLM parser if available (better for JavaScript-rendered content)
+        if self._use_llm and self._llm_parser:
+            try:
+                await self._discover_with_llm(msg)
+                return
+            except Exception as e:
+                logger.warning(f"LLM discovery failed, falling back to CSS: {e}")
+                # Fall through to CSS parsing
+
+        # CSS parsing fallback
         params = {}
         if msg.query:
             params["ti"] = msg.query
@@ -105,6 +143,49 @@ class BJVDiscoveryActor(BJVBaseActor):
         except Exception as e:
             error_msg = self._create_error_message(msg.correlation_id, None, e)
             await self._coordinator.tell(error_msg)
+
+    async def _discover_with_llm(self, msg: IniciarBusqueda) -> None:
+        """
+        Discover books using LLM-based extraction.
+
+        Args:
+            msg: Search initiation message
+        """
+        logger.info(f"Starting LLM-based BJV discovery: query={msg.query}")
+
+        try:
+            # Use LLM parser with multi-page support
+            results = await self._llm_parser.search_multiple_pages(
+                query=msg.query or "derecho",
+                area=msg.area if hasattr(msg, 'area') else None,
+                max_pages=10,
+                max_results=self._max_resultados,
+            )
+
+            # Emit discoveries
+            for result in results:
+                libro_id = result.libro_id.bjv_id
+                if self._register_discovery(libro_id):
+                    await self._emit_discovery(
+                        correlation_id=msg.correlation_id,
+                        libro_id=libro_id,
+                        titulo=result.titulo,
+                        url_detalle=result.url,
+                    )
+
+            # Notify completion
+            completion = BusquedaCompletada(
+                correlation_id=msg.correlation_id,
+                total_descubiertos=len(self._discovered_ids),
+                total_paginas=1,  # LLM parser handles pagination internally
+            )
+            await self._coordinator.tell(completion)
+
+            logger.info(f"LLM discovery complete: {len(self._discovered_ids)} books found")
+
+        except Exception as e:
+            logger.error(f"LLM discovery error: {e}")
+            raise
 
     async def _handle_procesar_pagina(self, msg: ProcesarPaginaResultados) -> None:
         """Handle page processing."""
