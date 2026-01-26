@@ -1,0 +1,60 @@
+services:
+  api:
+    build: .
+    image: legal-scraper:latest
+    container_name: legal-scraper-api
+    restart: always
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=America/Mexico_City
+      - SCRAPER_AUTH_USERNAME=${SCRAPER_AUTH_USERNAME}
+      - SCRAPER_AUTH_PASSWORD_HASH=${SCRAPER_AUTH_PASSWORD_HASH}
+      - SCRAPER_AUTH_JWT_SECRET=${SCRAPER_AUTH_JWT_SECRET}
+      - SCRAPER_AUTH_TOKEN_TTL_MINUTES=${SCRAPER_AUTH_TOKEN_TTL_MINUTES:-60}
+      - SCRAPER_AUTH_COOKIE_SECURE=${SCRAPER_AUTH_COOKIE_SECURE:-true}
+    volumes:
+      - ./scraped_data:/app/scraped_data
+      - ./scjn_data:/app/scjn_data
+      - ./bjv_data:/app/bjv_data
+      - ./checkpoints:/app/checkpoints
+    command: python src/gui/launcher.py --mode web --host 0.0.0.0 --port 8000
+    expose:
+      - "8000"
+
+  ui:
+    build: .
+    image: legal-scraper:latest
+    container_name: legal-scraper-ui
+    restart: always
+    working_dir: /app/reflex_ui
+    environment:
+      - SCRAPER_API_BASE_URL=http://api:8000
+    command: reflex run --env prod
+    expose:
+      - "3000"
+    depends_on:
+      - api
+
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    image: legal-scraper-caddy:latest
+    container_name: caddy
+    restart: always
+    environment:
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+    ports:
+      - "${SCRAPER_HTTP_PORT:-80}:80"
+      - "${SCRAPER_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - ui
+
+volumes:
+  caddy_data:
+  caddy_config:

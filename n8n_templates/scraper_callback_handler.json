@@ -1,0 +1,217 @@
+{
+  "name": "Legal Scraper - Callback Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scraper-callback",
+        "options": {}
+      },
+      "id": "webhook-callback",
+      "name": "Scraper Callback Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "scraper-callback-id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-completed",
+              "leftValue": "={{ $json.body.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-status",
+      "name": "Check Completion Status",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assignment-1",
+              "name": "event",
+              "value": "pipeline_completed",
+              "type": "string"
+            },
+            {
+              "id": "assignment-2",
+              "name": "workflow_id",
+              "value": "={{ $json.body.workflow_id }}",
+              "type": "string"
+            },
+            {
+              "id": "assignment-3",
+              "name": "source",
+              "value": "={{ $json.body.source }}",
+              "type": "string"
+            },
+            {
+              "id": "assignment-4",
+              "name": "status",
+              "value": "={{ $json.body.status }}",
+              "type": "string"
+            },
+            {
+              "id": "assignment-5",
+              "name": "downloaded_count",
+              "value": "={{ $json.body.downloaded_count }}",
+              "type": "number"
+            },
+            {
+              "id": "assignment-6",
+              "name": "error_count",
+              "value": "={{ $json.body.error_count }}",
+              "type": "number"
+            },
+            {
+              "id": "assignment-7",
+              "name": "embedding_workflow_id",
+              "value": "={{ $json.body.embedding_workflow_id }}",
+              "type": "string"
+            },
+            {
+              "id": "assignment-8",
+              "name": "timestamp",
+              "value": "={{ $json.body.timestamp }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "format-success",
+      "name": "Format Success Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assignment-error-1",
+              "name": "event",
+              "value": "pipeline_failed",
+              "type": "string"
+            },
+            {
+              "id": "assignment-error-2",
+              "name": "workflow_id",
+              "value": "={{ $json.body.workflow_id }}",
+              "type": "string"
+            },
+            {
+              "id": "assignment-error-3",
+              "name": "source",
+              "value": "={{ $json.body.source }}",
+              "type": "string"
+            },
+            {
+              "id": "assignment-error-4",
+              "name": "status",
+              "value": "={{ $json.body.status }}",
+              "type": "string"
+            },
+            {
+              "id": "assignment-error-5",
+              "name": "error_count",
+              "value": "={{ $json.body.error_count }}",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "id": "format-failure",
+      "name": "Format Failure Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "content": "## Success Notification Placeholder\n\nReplace this node with your desired action:\n- Send Slack/Teams notification\n- Send email\n- Update database\n- Trigger another workflow\n\n**Available data:**\n- `{{ $json.workflow_id }}` - Temporal workflow ID\n- `{{ $json.source }}` - Scraper source (scjn, bjv, cas, dof)\n- `{{ $json.downloaded_count }}` - Documents downloaded\n- `{{ $json.embedding_workflow_id }}` - Embedding workflow ID",
+        "height": 300,
+        "width": 300
+      },
+      "id": "success-placeholder",
+      "name": "Add Your Success Action Here",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [900, 100]
+    },
+    {
+      "parameters": {
+        "content": "## Failure Notification Placeholder\n\nReplace this node with your desired action:\n- Send alert to Slack/PagerDuty\n- Log to error tracking system\n- Retry logic\n\n**Available data:**\n- `{{ $json.workflow_id }}` - Temporal workflow ID\n- `{{ $json.source }}` - Scraper source\n- `{{ $json.status }}` - Final status\n- `{{ $json.error_count }}` - Error count",
+        "height": 280,
+        "width": 300
+      },
+      "id": "failure-placeholder",
+      "name": "Add Your Failure Action Here",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [900, 340]
+    }
+  ],
+  "connections": {
+    "Scraper Callback Webhook": {
+      "main": [
+        [
+          {
+            "node": "Check Completion Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Completion Status": {
+      "main": [
+        [
+          {
+            "node": "Format Success Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Failure Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "legal-scraper-callback"
+  },
+  "tags": [
+    {
+      "name": "legal-scraper",
+      "id": "1"
+    }
+  ]
+}

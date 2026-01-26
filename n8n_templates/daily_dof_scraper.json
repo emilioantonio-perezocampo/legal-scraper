@@ -1,0 +1,208 @@
+{
+  "name": "Legal Scraper - Daily DOF Scrape",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily at 6 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LEGAL_SCRAPER_API_URL || 'http://api:8000' }}/api/n8n/trigger-pipeline",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"source\": \"dof\",\n  \"max_results\": 100,\n  \"mode\": \"today\",\n  \"callback_url\": \"{{ $env.N8N_WEBHOOK_URL }}/webhook/scraper-callback\"\n}"
+      },
+      "id": "trigger-dof",
+      "name": "Trigger DOF Pipeline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "1",
+          "name": "Legal Scraper API Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-success",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-success",
+      "name": "Check Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assignment-1",
+              "name": "workflow_id",
+              "value": "={{ $json.workflow_id }}",
+              "type": "string"
+            },
+            {
+              "id": "assignment-2",
+              "name": "message",
+              "value": "DOF scraper started successfully at {{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "assignment-3",
+              "name": "status",
+              "value": "started",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "log-success",
+      "name": "Log Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assignment-error",
+              "name": "error",
+              "value": "={{ $json.message }}",
+              "type": "string"
+            },
+            {
+              "id": "assignment-time",
+              "name": "failed_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "log-failure",
+      "name": "Log Failure",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "content": "## Daily DOF Scraper\n\nThis workflow runs every day at 6 AM (Mexico City time) and:\n\n1. Triggers the DOF (Diario Oficial de la Federacion) scraper\n2. The scraper downloads today's legal publications\n3. On completion, the callback webhook receives the results\n\n**Environment Variables Required:**\n- `LEGAL_SCRAPER_API_URL` - API URL (e.g., http://api:8000)\n- `N8N_WEBHOOK_URL` - Your n8n webhook base URL\n\n**Credentials Required:**\n- HTTP Basic Auth for Legal Scraper API",
+        "height": 320,
+        "width": 400
+      },
+      "id": "workflow-description",
+      "name": "Workflow Description",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [60, 40]
+    }
+  ],
+  "connections": {
+    "Daily at 6 AM": {
+      "main": [
+        [
+          {
+            "node": "Trigger DOF Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger DOF Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Check Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Success": {
+      "main": [
+        [
+          {
+            "node": "Log Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Mexico_City"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "legal-scraper-daily-dof"
+  },
+  "tags": [
+    {
+      "name": "legal-scraper",
+      "id": "1"
+    },
+    {
+      "name": "scheduled",
+      "id": "2"
+    }
+  ]
+}
