@@ -42,6 +42,12 @@ from src.gui.infrastructure.crawl4ai_activities import (
     persist_documents_to_supabase,
     download_documents_pdfs,
 )
+from src.gui.infrastructure.scraper_document_workflow import (
+    ScraperDocumentWorkflow,
+    fetch_documents_for_embedding,
+    generate_embeddings_batch,
+    store_embeddings,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,13 +70,14 @@ async def run_worker():
     client = await Client.connect(temporal_address, namespace=namespace)
     logger.info("Connected to Temporal")
 
-    # Create worker with both API-based and Crawl4AI workflows
+    # Create worker with all workflows
     worker = Worker(
         client,
         task_queue=task_queue,
         workflows=[
             ScraperPipelineWorkflow,      # Original API-based workflow
             Crawl4AIExtractionWorkflow,   # New Crawl4AI direct workflow
+            ScraperDocumentWorkflow,      # Document embedding workflow
         ],
         activities=[
             # Original API-based activities
@@ -86,6 +93,10 @@ async def run_worker():
             extract_cas_documents,
             persist_documents_to_supabase,
             download_documents_pdfs,
+            # Document embedding activities
+            fetch_documents_for_embedding,
+            generate_embeddings_batch,
+            store_embeddings,
         ],
     )
 
