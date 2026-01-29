@@ -42,4 +42,6 @@ dependencies:
       - instructor>=1.0.0    # Structured LLM extraction with Pydantic
       - openai>=1.0.0        # OpenRouter compatibility layer
       # Temporal Integration (document embedding workflows)
-      - temporalio>=1.7.0    # Temporal workflow SDK
+      - temporalio>=1.7.0
+      # Supabase client for document persistence and embeddings
+      - supabase>=2.0.0    # Temporal workflow SDK
