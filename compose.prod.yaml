@@ -21,7 +21,7 @@ services:
       # Temporal integration for document embedding processing
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-temporal-1:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
-      - TEMPORAL_TASK_QUEUE=${TEMPORAL_TASK_QUEUE:-legalconnect-meeting}
+      - TEMPORAL_TASK_QUEUE=${TEMPORAL_TASK_QUEUE:-scraper-pipeline}
       - TEMPORAL_ENABLED=${TEMPORAL_ENABLED:-true}
       # Supabase persistence
       - ENABLE_SUPABASE_PERSISTENCE=${ENABLE_SUPABASE_PERSISTENCE:-false}
