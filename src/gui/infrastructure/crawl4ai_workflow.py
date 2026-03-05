@@ -273,6 +273,11 @@ async def create_crawl4ai_schedule(
     for key, value in defaults.get(source, {}).items():
         workflow_config.setdefault(key, value)
 
+    # Pipeline defaults — scheduled jobs should always persist and download
+    workflow_config.setdefault("download_pdfs", True)
+    workflow_config.setdefault("upload_to_storage", True)
+    workflow_config.setdefault("persist_to_db", True)
+
     task_queue = os.environ.get("TEMPORAL_TASK_QUEUE", "scraper-pipeline")
 
     await client.create_schedule(

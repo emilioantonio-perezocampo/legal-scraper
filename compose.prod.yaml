@@ -75,6 +75,8 @@ services:
       - SUPABASE_DB_NAME=${SUPABASE_DB_NAME:-postgres}
       - SUPABASE_DB_PASSWORD=${SUPABASE_DB_PASSWORD}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SCRAPER_PDF_BUCKET=${SCRAPER_PDF_BUCKET:-legal-scraper-pdfs}
     command: python -m src.gui.infrastructure.scraper_worker
     depends_on:
       - api

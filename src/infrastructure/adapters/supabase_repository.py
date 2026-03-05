@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         TextChunk,
         DocumentEmbedding,
     )
+    from src.domain.cas_entities import LaudoArbitral
 
 
 def _convert_articles_to_json(articles: tuple) -> list[dict[str, Any]]:
@@ -120,6 +121,76 @@ def _prepare_scjn_data(
     return parent_data, scjn_data
 
 
+def _prepare_cas_data(
+    document: "LaudoArbitral",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Prepare CAS arbitral award data for database insertion.
+
+    Splits the document into parent table data (scraper_documents)
+    and child table data (cas_laudos).
+
+    Args:
+        document: LaudoArbitral domain entity
+
+    Returns:
+        Tuple of (parent_data, cas_data) dictionaries
+    """
+    fecha_iso = (
+        document.fecha.valor.isoformat()
+        if document.fecha and document.fecha.valor
+        else None
+    )
+
+    parent_data = {
+        "id": document.id,
+        "source_type": "cas",
+        "external_id": document.numero_caso.valor,
+        "title": document.titulo,
+        "publication_date": fecha_iso,
+    }
+
+    cas_data = {
+        "id": document.id,
+        "numero_caso": document.numero_caso.valor,
+        "fecha_laudo": fecha_iso,
+        "tipo_procedimiento": (
+            document.tipo_procedimiento.value
+            if document.tipo_procedimiento
+            else None
+        ),
+        "categoria_deporte": (
+            document.categoria_deporte.value
+            if document.categoria_deporte
+            else None
+        ),
+        "materia": document.materia.value if document.materia else None,
+        "idioma": document.idioma.value if document.idioma else None,
+        "estado": document.estado.value if document.estado else "published",
+        "resumen": document.resumen,
+        "texto_completo": document.texto_completo,
+        "partes": [
+            {"nombre": p.nombre, "tipo": p.tipo.value, "pais": p.pais}
+            for p in document.partes
+        ],
+        "arbitros": [
+            {"nombre": a.nombre, "nacionalidad": a.nacionalidad, "rol": a.rol}
+            for a in document.arbitros
+        ],
+        "federaciones": [
+            {"nombre": f.nombre, "acronimo": f.acronimo,
+             "deporte": f.deporte.value if f.deporte else None}
+            for f in document.federaciones
+        ],
+        "palabras_clave": list(document.palabras_clave),
+        "pdf_storage_path": None,
+        "chunk_count": 0,
+        "embedding_status": "pending",
+    }
+
+    return parent_data, cas_data
+
+
 class SupabaseDocumentRepository:
     """
     Repository for persisting legal documents to Supabase.
@@ -168,6 +239,8 @@ class SupabaseDocumentRepository:
         """
         if source_type == "scjn":
             parent_data, child_data = _prepare_scjn_data(document)
+        elif source_type == "cas":
+            parent_data, child_data = _prepare_cas_data(document)
         else:
             raise ValueError(f"Unsupported source_type: {source_type}")
 
@@ -178,8 +251,9 @@ class SupabaseDocumentRepository:
         # Insert into parent table
         self._client.table("scraper_documents").insert(parent_data).execute()
 
-        # Insert into child table
-        self._client.table(f"{source_type}_documents").insert(child_data).execute()
+        # Insert into child table (table names vary: scjn_documents, cas_laudos, etc.)
+        child_table = self._get_child_table_name(source_type)
+        self._client.table(child_table).insert(child_data).execute()
 
         return document.id
 

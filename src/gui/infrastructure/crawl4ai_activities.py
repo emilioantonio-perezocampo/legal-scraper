@@ -865,50 +865,79 @@ async def persist_documents_to_supabase(
     source: str,
 ) -> dict:
     """
-    Persist extracted documents to Supabase.
+    Persist extracted documents to Supabase via direct upserts.
+
+    Inserts into scraper_documents using the (source_type, external_id) unique
+    constraint for idempotent re-scraping. Does NOT populate source-specific
+    child tables (scjn_documents, cas_laudos, etc.).
 
     Args:
         documents: List of ExtractedDocument dicts
-        source: Source type for logging
+        source: Source type (scjn, dof, bjv, cas)
 
     Returns:
         Dict with success status and counts
     """
     activity.logger.info(f"Persisting {len(documents)} {source} documents to Supabase")
 
-    # Check if Supabase is enabled
     if not os.environ.get("ENABLE_SUPABASE_PERSISTENCE", "").lower() == "true":
         activity.logger.info("Supabase persistence disabled, skipping")
         return {"success": True, "persisted_count": 0, "skipped": True}
 
     try:
-        from src.infrastructure.adapters.supabase_repository import SupabaseDocumentRepository
+        from supabase import create_client
 
-        repo = SupabaseDocumentRepository()
+        supabase_url = os.environ.get("SUPABASE_URL")
+        supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
+        if not supabase_url or not supabase_key:
+            activity.logger.warning("Supabase URL or key not configured")
+            return {"success": False, "persisted_count": 0, "errors": ["Supabase not configured"]}
+
+        client = create_client(supabase_url, supabase_key)
         persisted = 0
+        skipped = 0
         errors = []
 
         for doc in documents:
             try:
-                # Convert to source-specific format and save
-                await repo.save_document(
-                    source_type=source,
-                    external_id=doc.get("external_id"),
-                    title=doc.get("title"),
-                    publication_date=doc.get("publication_date"),
-                    metadata=doc.get("metadata", {}),
-                )
-                persisted += 1
-            except Exception as e:
-                errors.append(f"Document {doc.get('external_id')}: {str(e)}")
+                external_id = doc.get("external_id")
+                if not external_id:
+                    skipped += 1
+                    continue
 
-        activity.logger.info(f"Persisted {persisted}/{len(documents)} documents")
+                # Normalize publication_date to YYYY-MM-DD if it has time info
+                pub_date = doc.get("publication_date")
+                if pub_date and len(pub_date) > 10:
+                    pub_date = pub_date[:10]
+
+                row = {
+                    "source_type": source,
+                    "external_id": external_id,
+                    "title": doc.get("title", "Untitled")[:500],
+                    "publication_date": pub_date,
+                }
+
+                # Upsert using unique constraint (source_type, external_id)
+                client.table("scraper_documents").upsert(
+                    row, on_conflict="source_type,external_id"
+                ).execute()
+                persisted += 1
+
+            except Exception as e:
+                errors.append(f"{doc.get('external_id', '?')}: {str(e)}")
+                activity.logger.warning(f"Failed to persist {doc.get('external_id')}: {e}")
+
+        activity.logger.info(
+            f"Persisted {persisted}/{len(documents)} documents ({skipped} skipped)"
+        )
 
         return {
             "success": len(errors) == 0,
             "persisted_count": persisted,
+            "skipped_count": skipped,
             "error_count": len(errors),
-            "errors": errors[:10],  # Limit error messages
+            "errors": errors[:10],
         }
 
     except Exception as e:
