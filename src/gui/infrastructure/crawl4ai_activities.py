@@ -727,10 +727,10 @@ async def download_documents_pdfs(
                         extension = ".pdf"
                         mime_type = "application/pdf"
                     else:
-                        # Unknown type, save as binary
-                        extension = ".bin"
-                        mime_type = "application/octet-stream"
-                        activity.logger.warning(f"{external_id}: Unknown file type, saving as .bin")
+                        # Default to PDF for legal document sources
+                        extension = ".pdf"
+                        mime_type = "application/pdf"
+                        activity.logger.warning(f"{external_id}: Unrecognized file type, defaulting to PDF")
 
                     # Sanitize filename
                     safe_id = external_id.replace("/", "_").replace("=", "").replace("+", "-")

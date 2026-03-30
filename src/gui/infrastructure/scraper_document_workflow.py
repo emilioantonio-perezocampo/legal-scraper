@@ -143,13 +143,13 @@ async def generate_embeddings_batch(
                             "Content-Type": "application/json",
                         },
                         json={
-                            "model": "openai/text-embedding-3-small",
+                            "model": "qwen/qwen3-embedding-8b",
                             "input": text[:8000],  # Limit input length
                         },
                     ) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            embedding = data["data"][0]["embedding"]
+                            embedding = data["data"][0]["embedding"][:4000]  # halfvec(4000)
                             results.append({
                                 "document_id": doc["id"],
                                 "embedding": embedding,
