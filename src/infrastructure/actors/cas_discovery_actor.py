@@ -141,11 +141,11 @@ class CASDiscoveryActor(CASBaseActor):
                 sport = msg.filtros.get('sport')
 
             # Use LLM parser with multi-page support
-            max_results = msg.max_paginas * 20 if msg.max_paginas else 100
+            max_results = msg.max_paginas * 20 if msg.max_paginas else 5000
             results = await self._llm_parser.search_multiple_pages(
                 year=year,
                 sport=sport,
-                max_pages=msg.max_paginas or 5,
+                max_pages=msg.max_paginas or 250,
                 max_results=max_results,
             )
 

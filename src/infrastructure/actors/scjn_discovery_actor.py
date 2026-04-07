@@ -87,7 +87,7 @@ class SCJNDiscoveryActor(BaseActor):
                 from src.infrastructure.adapters.scjn_llm_parser import SCJNLLMParser
                 self._llm_parser = SCJNLLMParser()
                 logger.info("SCJN Discovery Actor started with LLM parser (OpenRouter)")
-                return  # LLM parser is preferred, no need for browser
+                logger.info("SCJN LLM parser initialized")
             except ImportError as e:
                 logger.warning(f"LLM parser not available: {e}")
                 self._use_llm = False
@@ -95,7 +95,7 @@ class SCJNDiscoveryActor(BaseActor):
                 logger.warning(f"Failed to initialize LLM parser: {e}")
                 self._use_llm = False
 
-        # Fallback to browser automation
+        # Also initialize browser for full corpus discovery (ASP.NET pagination)
         if self._use_browser:
             try:
                 from src.infrastructure.adapters.scjn_browser_adapter import (
@@ -136,11 +136,15 @@ class SCJNDiscoveryActor(BaseActor):
         try:
             await self._rate_limiter.acquire()
 
-            # Use LLM parser if available (most robust)
-            if self._use_llm and self._llm_parser:
+            # For full corpus discovery, use browser adapter (handles ASP.NET pagination).
+            # LLM+HTTP GET can't paginate ASP.NET viewstate forms.
+            if cmd.discover_all_pages and self._use_browser and self._browser_adapter:
+                logger.info("Using browser adapter for full corpus discovery (ASP.NET compatible)")
+                # Fall through to browser/HTTP path below
+            elif self._use_llm and self._llm_parser:
                 return await self._discover_with_llm(cmd)
 
-            # Fallback to browser/HTTP
+            # Browser/HTTP path — handles ASP.NET pagination properly
             html = await self._fetch_search_page(
                 category=cmd.category,
                 scope=cmd.scope,

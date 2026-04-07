@@ -223,7 +223,7 @@ class SCJNStartRequest(BaseModel):
     """Request model for starting SCJN scraping job."""
     category: Optional[str] = Field(default=None, description="Legislation category filter")
     scope: Optional[str] = Field(default=None, description="Federal or State scope")
-    max_results: int = Field(default=100, description="Maximum results to fetch")
+    max_results: int = Field(default=5000, description="Maximum results to fetch")
     output_directory: str = Field(default="scjn_data")
 
 
@@ -250,7 +250,7 @@ class BJVStartRequest(BaseModel):
     """Request model for starting BJV scraping job."""
     termino_busqueda: Optional[str] = Field(default=None, description="Search term")
     area_derecho: Optional[str] = Field(default=None, description="Legal area filter")
-    max_resultados: int = Field(default=100, description="Maximum results to fetch")
+    max_resultados: int = Field(default=5000, description="Maximum results to fetch")
     incluir_capitulos: bool = Field(default=True, description="Include chapter info")
     descargar_pdfs: bool = Field(default=True, description="Download PDF files")
     output_directory: str = Field(default="bjv_data")
@@ -281,7 +281,7 @@ class CASStartRequest(BaseModel):
     year_to: Optional[int] = Field(default=None, description="End year filter")
     sport: Optional[str] = Field(default=None, description="Sport filter")
     matter: Optional[str] = Field(default=None, description="Matter/subject filter")
-    max_results: int = Field(default=100, ge=1, le=1000, description="Maximum results to fetch")
+    max_results: int = Field(default=5000, ge=1, le=10000, description="Maximum results to fetch")
 
 
 class CASStatusResponse(BaseModel):
@@ -336,7 +336,7 @@ class EmbeddingStatusResponse(BaseModel):
 class N8nPipelineTriggerRequest(BaseModel):
     """Request model for n8n to trigger a scraper pipeline."""
     source: str = Field(..., description="Scraper source: scjn, bjv, cas, dof")
-    max_results: int = Field(default=100, ge=1, le=1000)
+    max_results: int = Field(default=5000, ge=1, le=10000)
     callback_url: Optional[str] = Field(default=None, description="n8n webhook URL for completion notification")
     # Source-specific options
     category: Optional[str] = None  # SCJN

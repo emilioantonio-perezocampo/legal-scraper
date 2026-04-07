@@ -58,6 +58,8 @@ services:
     networks:
       - default
       - legaltracking-dev_default
+    volumes:
+      - /mnt/HC_Volume_103359368/dev/data/dof:/app/dof_data
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=America/Mexico_City

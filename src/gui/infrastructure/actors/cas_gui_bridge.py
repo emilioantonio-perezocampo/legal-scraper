@@ -8,7 +8,11 @@ and controlling CAS scraping jobs.
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Callable, Awaitable, Dict, Any
 from datetime import datetime, timezone
+import asyncio
+import logging
 import uuid
+
+logger = logging.getLogger(__name__)
 
 from src.infrastructure.actors.cas_base_actor import CASBaseActor
 
@@ -133,16 +137,137 @@ class CASGuiBridgeActor(CASBaseActor):
         )
         await self._emit_event(event)
 
-        # Send message to coordinator to start the job
-        if self._coordinator:
-            await self._coordinator.tell({
-                "type": "start_job",
-                "job_id": job_id,
-                "filters": filters,
-                "output_dir": self._output_dir,
-            })
+        # Run CAS scraping directly (coordinator was never connected)
+        asyncio.create_task(self._run_cas_scrape(config, job_id))
 
         return job_id
+
+    async def _run_cas_scrape(self, config: CASGuiConfig, job_id: str):
+        """Run CAS scraping using Playwright to render SharePoint page."""
+        import os
+        import re
+
+        total_saved = 0
+        total_errors = 0
+        max_results = config.max_results
+
+        # Supabase client
+        supabase_client = None
+        sb_url = os.environ.get("SUPABASE_URL")
+        sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        if sb_url and sb_key:
+            try:
+                from supabase import create_client
+                supabase_client = create_client(sb_url, sb_key)
+            except Exception:
+                pass
+
+        try:
+            from playwright.async_api import async_playwright
+
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                )
+                context = await browser.new_context(
+                    viewport={"width": 1920, "height": 1080},
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                )
+                page = await context.new_page()
+
+                try:
+                    cas_url = "https://jurisprudence.tas-cas.org/Shared%20Documents/Forms/AllItems.aspx"
+                    await page.goto(cas_url, timeout=60000)
+                    await page.wait_for_load_state("networkidle", timeout=30000)
+                    await asyncio.sleep(5)
+
+                    # Extract case data from SharePoint document library
+                    cases = await page.evaluate("""
+                        () => {
+                            const results = [];
+                            // SharePoint list/library items
+                            const rows = document.querySelectorAll('tr');
+                            for (const row of rows) {
+                                const cells = row.querySelectorAll('td');
+                                if (cells.length >= 3) {
+                                    const text = row.innerText.trim();
+                                    // CAS cases have format like "CAS 2024/A/1234"
+                                    const caseMatch = text.match(/CAS\\s*(\\d{4})[\\s/]*(\\w)[\\s/]*(\\d+)/i);
+                                    if (caseMatch) {
+                                        results.push({
+                                            caseNumber: `CAS ${caseMatch[1]}/${caseMatch[2]}/${caseMatch[3]}`,
+                                            year: caseMatch[1],
+                                            fullText: text.substring(0, 500)
+                                        });
+                                    }
+                                }
+                            }
+                            // Also try links with PDF references
+                            const links = document.querySelectorAll('a[href*=".pdf"], a[href*="CAS"]');
+                            for (const link of links) {
+                                const text = link.innerText.trim();
+                                const href = link.getAttribute('href') || '';
+                                const caseMatch = (text + ' ' + href).match(/CAS\\s*(\\d{4})[\\s/]*(\\w)[\\s/]*(\\d+)/i);
+                                if (caseMatch) {
+                                    const cn = `CAS ${caseMatch[1]}/${caseMatch[2]}/${caseMatch[3]}`;
+                                    if (!results.find(r => r.caseNumber === cn)) {
+                                        results.push({
+                                            caseNumber: cn,
+                                            year: caseMatch[1],
+                                            fullText: text.substring(0, 500),
+                                            url: href
+                                        });
+                                    }
+                                }
+                            }
+                            return results;
+                        }
+                    """)
+
+                    logger.info(f"CAS Playwright found {len(cases)} cases on page")
+
+                    for case in cases:
+                        if total_saved >= max_results:
+                            break
+                        case_num = case.get("caseNumber", "")
+                        year = case.get("year", "")
+                        title = case.get("fullText", case_num)[:500]
+
+                        if supabase_client and case_num:
+                            try:
+                                supabase_client.table("scraper_documents").upsert({
+                                    "source_type": "cas",
+                                    "external_id": case_num,
+                                    "title": title,
+                                    "publication_date": f"{year}-01-01" if year else None,
+                                    "embedding_status": "pending",
+                                }, on_conflict="source_type,external_id").execute()
+                                total_saved += 1
+                            except Exception:
+                                total_errors += 1
+
+                except Exception as e:
+                    logger.error(f"CAS Playwright error: {e}")
+                    total_errors += 1
+                finally:
+                    await context.close()
+                    await browser.close()
+
+        except ImportError:
+            logger.error("Playwright not available for CAS scraping")
+        except Exception as e:
+            logger.error(f"CAS scrape failed: {e}")
+
+        # Emit completion
+        await self._emit_event(CASJobCompleted(
+            job_id=job_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            estadisticas={"documents_saved": total_saved, "errors": total_errors},
+            exito=total_errors == 0,
+        ))
+        self._current_job_id = None
+        logger.info(f"CAS scrape complete: {total_saved} cases, {total_errors} errors")
 
     async def pause_job(self) -> None:
         """Pause the current job."""

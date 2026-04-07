@@ -31,7 +31,7 @@ class DocumentEmbeddingInput:
     source_type: str
     document_ids: List[str]
     batch_size: int = 10
-    max_documents: int = 100
+    max_documents: int = 10000
 
 
 @dataclass
@@ -79,63 +79,88 @@ async def fetch_documents_for_embedding(
 
     client = create_client(url, key)
 
-    # Query documents that need embeddings
-    query = client.table("scraper_documents").select("id, title, external_id, source_type")
-
     if document_ids:
+        # Fetch specific documents by ID
+        query = client.table("scraper_documents").select("id, title, external_id, source_type")
         query = query.in_("id", document_ids)
+        query = query.limit(max_documents)
+        result = query.execute()
+        documents = result.data if result.data else []
     else:
-        query = query.eq("source_type", source_type)
+        # Fetch documents that DON'T already have embeddings in scraper_chunks.
+        # First get IDs that already have chunks for this source.
+        existing = client.table("scraper_chunks").select("document_id").eq(
+            "source_type", source_type
+        ).execute()
+        already_embedded_ids = {row["document_id"] for row in (existing.data or [])}
 
-    query = query.limit(max_documents)
+        activity.logger.info(
+            f"Found {len(already_embedded_ids)} already-embedded docs for {source_type}"
+        )
 
-    result = query.execute()
-    documents = result.data if result.data else []
+        # Now fetch all documents for this source, ordered by created_at desc (newest first)
+        query = client.table("scraper_documents").select(
+            "id, title, external_id, source_type"
+        ).eq("source_type", source_type).order("created_at", desc=True).limit(max_documents)
+        result = query.execute()
+        all_docs = result.data if result.data else []
+
+        # Filter out already-embedded docs
+        documents = [doc for doc in all_docs if doc["id"] not in already_embedded_ids]
+
+        activity.logger.info(
+            f"After filtering: {len(documents)} new docs to embed "
+            f"(out of {len(all_docs)} total, {len(already_embedded_ids)} already done)"
+        )
 
     activity.logger.info(f"Fetched {len(documents)} documents")
     return documents
 
 
 @activity.defn
-async def generate_embeddings_batch(
+async def generate_and_store_embeddings(
     documents: List[dict],
-    model: str = "text-embedding-3-small",
-) -> List[dict]:
+    source_type: str,
+) -> dict:
     """
-    Generate embeddings for a batch of documents.
+    Generate embeddings AND store directly to Supabase in one step.
 
-    Uses OpenRouter or falls back to sentence-transformers.
+    This avoids passing large embedding vectors through Temporal's payload
+    system, which has a 524KB limit that 4000-dim vectors exceed.
 
-    Args:
-        documents: List of documents with content
-        model: Embedding model name
-
-    Returns:
-        List of dicts with document_id and embedding vector
+    Returns only a small status dict — no vectors in the payload.
     """
     import os
 
-    activity.logger.info(f"Generating embeddings for {len(documents)} documents")
+    activity.logger.info(f"Generating+storing embeddings for {len(documents)} docs ({source_type})")
 
     if not documents:
-        return []
+        return {"stored_count": 0, "error_count": 0}
 
-    results = []
-
-    # Try OpenRouter first, fallback to sentence-transformers
     openrouter_key = os.environ.get("OPENROUTER_API_KEY")
+    sb_url = os.environ.get("SUPABASE_URL")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
+    if not sb_url or not sb_key:
+        return {"stored_count": 0, "error_count": len(documents), "error": "Supabase not configured"}
+
+    from supabase import create_client
+    sb_client = create_client(sb_url, sb_key)
+
+    stored = 0
+    errors = 0
 
     if openrouter_key:
-        # Use OpenRouter API
         import aiohttp
-
         async with aiohttp.ClientSession() as session:
             for doc in documents:
                 try:
                     text = doc.get("title", "") or doc.get("external_id", "")
                     if not text:
+                        errors += 1
                         continue
 
+                    # Generate embedding
                     async with session.post(
                         "https://openrouter.ai/api/v1/embeddings",
                         headers={
@@ -144,111 +169,36 @@ async def generate_embeddings_batch(
                         },
                         json={
                             "model": "qwen/qwen3-embedding-8b",
-                            "input": text[:8000],  # Limit input length
+                            "input": text[:8000],
                         },
                     ) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            embedding = data["data"][0]["embedding"][:4000]  # halfvec(4000)
-                            results.append({
-                                "document_id": doc["id"],
-                                "embedding": embedding,
-                                "title": text,
-                            })
-                        else:
-                            activity.logger.warning(f"Embedding failed for {doc['id']}: {resp.status}")
+                        if resp.status != 200:
+                            errors += 1
+                            continue
+                        data = await resp.json()
+                        embedding = data["data"][0]["embedding"][:4000]
+
+                    # Store directly — vector never passes through Temporal
+                    doc_id = doc["id"]
+                    chunk_id = f"{source_type}-{doc_id}-0"
+                    sb_client.table("scraper_chunks").upsert({
+                        "chunk_id": chunk_id,
+                        "document_id": doc_id,
+                        "source_type": source_type,
+                        "chunk_index": 0,
+                        "text": text,
+                        "titulo": text,
+                        "embedding": embedding,
+                        "metadata": {"source": "scraper_document_workflow"},
+                    }, on_conflict="chunk_id").execute()
+                    stored += 1
+
                 except Exception as e:
-                    activity.logger.error(f"Error generating embedding for {doc['id']}: {e}")
-    else:
-        # Fallback to sentence-transformers
-        activity.logger.info("Using sentence-transformers fallback")
-        try:
-            from sentence_transformers import SentenceTransformer
+                    activity.logger.warning(f"Error for {doc.get('id','?')}: {e}")
+                    errors += 1
 
-            model = SentenceTransformer("all-MiniLM-L6-v2")
-            texts = [doc.get("title", "") or doc.get("external_id", "") for doc in documents]
-            embeddings = model.encode(texts)
-
-            for doc, text, embedding in zip(documents, texts, embeddings):
-                results.append({
-                    "document_id": doc["id"],
-                    "embedding": embedding.tolist(),
-                    "title": text,
-                })
-        except ImportError:
-            activity.logger.error("sentence-transformers not installed")
-
-    activity.logger.info(f"Generated {len(results)} embeddings")
-    return results
-
-
-@activity.defn
-async def store_embeddings(
-    embeddings: List[dict],
-    source_type: str,
-) -> dict:
-    """
-    Store generated embeddings in Supabase.
-
-    Args:
-        embeddings: List of dicts with document_id and embedding
-        source_type: Source type for metadata
-
-    Returns:
-        Dict with success status and counts
-    """
-    import os
-    from supabase import create_client
-
-    activity.logger.info(f"Storing {len(embeddings)} embeddings")
-
-    if not embeddings:
-        return {"success": True, "stored_count": 0}
-
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-
-    if not url or not key:
-        activity.logger.warning("Supabase not configured")
-        return {"success": False, "error": "Supabase not configured"}
-
-    client = create_client(url, key)
-    stored = 0
-    errors = []
-
-    for item in embeddings:
-        try:
-            doc_id = item["document_id"]
-            embedding = item["embedding"]
-            title = item.get("title", "")
-
-            # Generate unique chunk_id for this document
-            chunk_id = f"{source_type}-{doc_id}-0"
-
-            # Insert into scraper_chunks table with embedding
-            # The embedding column is halfvec(4000) type
-            client.table("scraper_chunks").upsert({
-                "chunk_id": chunk_id,
-                "document_id": doc_id,
-                "source_type": source_type,
-                "chunk_index": 0,  # Single chunk per document for now
-                "text": title or "Document title",  # Required field
-                "titulo": title,
-                "embedding": embedding,
-                "metadata": {"source": "scraper_document_workflow"},
-            }, on_conflict="chunk_id").execute()
-            stored += 1
-        except Exception as e:
-            errors.append(f"{item['document_id']}: {str(e)}")
-
-    activity.logger.info(f"Stored {stored}/{len(embeddings)} embeddings")
-
-    return {
-        "success": len(errors) == 0,
-        "stored_count": stored,
-        "error_count": len(errors),
-        "errors": errors[:5],
-    }
+    activity.logger.info(f"Done: {stored} stored, {errors} errors")
+    return {"stored_count": stored, "error_count": errors}
 
 
 # =============================================================================
@@ -281,7 +231,7 @@ class ScraperDocumentWorkflow:
         source_type = input.get("source_type", "unknown")
         document_ids = input.get("document_ids", [])
         batch_size = input.get("batch_size", 10)
-        max_documents = input.get("max_documents", 100)
+        max_documents = input.get("max_documents", 10000)
 
         workflow.logger.info(f"Starting ScraperDocumentWorkflow for job {job_id}")
 
@@ -306,29 +256,19 @@ class ScraperDocumentWorkflow:
                     "embeddings_generated": 0,
                 }
 
-            # Step 2: Process in batches
+            # Step 2: Process in batches — generate + store in one activity
+            # to avoid passing large embedding vectors through Temporal payloads
             for i in range(0, len(documents), batch_size):
                 batch = documents[i:i + batch_size]
                 workflow.logger.info(f"Processing batch {i // batch_size + 1}")
 
-                # Generate embeddings
-                embeddings = await workflow.execute_activity(
-                    generate_embeddings_batch,
-                    args=[batch],
+                result = await workflow.execute_activity(
+                    generate_and_store_embeddings,
+                    args=[batch, source_type],
                     start_to_close_timeout=timedelta(minutes=10),
                 )
 
-                if embeddings:
-                    # Store embeddings
-                    result = await workflow.execute_activity(
-                        store_embeddings,
-                        args=[embeddings, source_type],
-                        start_to_close_timeout=timedelta(minutes=5),
-                    )
-
-                    total_embeddings += result.get("stored_count", 0)
-                    if result.get("errors"):
-                        all_errors.extend(result["errors"])
+                total_embeddings += result.get("stored_count", 0)
 
                 total_processed += len(batch)
 

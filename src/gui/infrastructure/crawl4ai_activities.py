@@ -247,6 +247,7 @@ async def extract_dof_documents(
     """
     import aiohttp
     from src.infrastructure.adapters.dof_index_parser import parse_dof_index
+    from src.infrastructure.adapters.dof_sumario_parser import parse_dof_sumario
 
     activity.logger.info(f"Starting DOF extraction: mode={mode}")
 
@@ -255,7 +256,46 @@ async def extract_dof_documents(
     pdfs_downloaded = 0
 
     try:
-        # Determine dates to fetch
+        # For today mode, try sumario.xml first (structured, includes section/agency)
+        if mode == "today":
+            try:
+                async with aiohttp.ClientSession(headers={"User-Agent": USER_AGENT}) as session:
+                    async with session.get("https://dof.gob.mx/sumario.xml", ssl=False, timeout=30) as resp:
+                        if resp.status == 200:
+                            xml_bytes = await resp.read()
+                            items = parse_dof_sumario(xml_bytes)
+                            if items:
+                                activity.logger.info(f"DOF sumario.xml: {len(items)} publications (structured)")
+                                for item in items:
+                                    cod_diario = item.get("cod_diario")
+                                    extracted = ExtractedDocument(
+                                        source="dof",
+                                        external_id=cod_diario,
+                                        title=item.get("title", "Unknown"),
+                                        content_type="publicacion",
+                                        publication_date=date.today().isoformat(),
+                                        url=item.get("url"),
+                                        metadata={
+                                            "section": item.get("section"),
+                                            "cod_diario": cod_diario,
+                                            "discovery_source": "sumario.xml",
+                                        },
+                                        pdf_url=item.get("url"),
+                                    )
+                                    all_documents.append(asdict(extracted))
+                                # Skip the date-based HTML fallback
+                                return asdict(ExtractionResult(
+                                    source="dof",
+                                    success=True,
+                                    document_count=len(all_documents),
+                                    documents=all_documents,
+                                    errors=errors,
+                                    output_directory=output_directory,
+                                ))
+            except Exception as e:
+                activity.logger.warning(f"sumario.xml failed, falling back to HTML: {e}")
+
+        # Determine dates to fetch (range mode or today fallback)
         if mode == "today":
             dates_to_fetch = [date.today()]
         elif mode == "range" and start_date and end_date:
@@ -685,10 +725,17 @@ async def download_documents_pdfs(
                 # Download the file
                 activity.logger.info(f"Downloading: {external_id}")
 
-                # Handle DOF special case - need to fetch detail page for actual PDF link
-                if source == "dof" and "nota_detalle.php" in pdf_url:
-                    pdf_url = await _extract_dof_pdf_url(session, pdf_url)
-                    if not pdf_url:
+                # Handle DOF special case - use nota_to_doc.php directly
+                if source == "dof":
+                    cod = doc.get("external_id") or ""
+                    if not cod and "codigo=" in (pdf_url or ""):
+                        import re as _re
+                        m = _re.search(r'codigo=(\d+)', pdf_url)
+                        if m:
+                            cod = m.group(1)
+                    if cod:
+                        pdf_url = f"https://dof.gob.mx/nota_to_doc.php?codnota={cod}"
+                    else:
                         skipped += 1
                         continue
 

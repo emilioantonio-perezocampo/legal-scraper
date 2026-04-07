@@ -130,7 +130,7 @@ class CASLLMParser:
     """
 
     BASE_URL = "https://jurisprudence.tas-cas.org"
-    SEARCH_URL = BASE_URL
+    SEARCH_URL = f"{BASE_URL}/Shared%20Documents/Forms/AllItems.aspx"
 
     EXTRACTION_INSTRUCTION = """
 You are extracting arbitration awards from the Court of Arbitration for Sport (CAS/TAS) jurisprudence database.
@@ -238,23 +238,16 @@ If a field is not visible or cannot be determined, use null.
         year: Optional[int] = None,
     ) -> tuple[List[CASSearchResult], bool]:
         """
-        Use Playwright directly to interact with CAS Angular SPA.
+        Use Playwright to render the CAS SharePoint document library page.
 
-        The CAS site uses Bootstrap dropdowns for filters:
-        1. Find the Sport filter button by index
-        2. Click to open dropdown
-        3. Use search input to filter sport options
-        4. Click the sport option
-        5. Click Apply filters
-        6. Extract cases from the results table
+        Navigates to AllItems.aspx and extracts case links from the
+        SharePoint document library view (no dropdown interaction needed).
         """
         try:
             from playwright.async_api import async_playwright
         except ImportError:
             logger.warning("Playwright not available for CAS search")
             return [], False
-
-        sport_filter = sport or "Football"
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -272,104 +265,44 @@ If a field is not visible or cannot be determined, use null.
             page = await context.new_page()
 
             try:
-                await page.goto(self.SEARCH_URL, timeout=30000)
+                await page.goto(self.SEARCH_URL, timeout=60000)
                 await page.wait_for_load_state("networkidle", timeout=30000)
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(5000)
 
-                # Step 1: Find Sport button index
-                buttons_info = await page.evaluate("""
+                # Extract document links from SharePoint list view
+                links_data = await page.evaluate("""
                     (() => {
-                        const btns = document.querySelectorAll("button.filter-button");
-                        return Array.from(btns).map((btn, i) => ({
-                            index: i,
-                            text: btn.innerText.trim().substring(0, 30)
-                        }));
-                    })()
-                """)
-
-                sport_idx = None
-                for b in buttons_info:
-                    if "Sport" in b["text"]:
-                        sport_idx = b["index"]
-                        break
-
-                if sport_idx is None:
-                    logger.warning("Sport filter button not found")
-                    return [], False
-
-                # Step 2: Click Sport dropdown
-                await page.click("body", position={"x": 10, "y": 10})
-                await page.wait_for_timeout(500)
-                sport_buttons = page.locator("button.filter-button")
-                await sport_buttons.nth(sport_idx).click()
-                await page.wait_for_timeout(1500)
-
-                # Step 3: Type sport name in search to filter
-                await page.evaluate(f"""
-                    (() => {{
-                        const btns = document.querySelectorAll("button.filter-button");
-                        const sportBtn = btns[{sport_idx}];
-                        const parent = sportBtn.parentElement;
-                        const dropdown = parent.querySelector(".dropdown-menu");
-                        if (!dropdown) return;
-                        const searchInput = dropdown.querySelector("input.input-search, input[type='text']");
-                        if (searchInput) {{
-                            searchInput.focus();
-                            searchInput.value = "{sport_filter}";
-                            searchInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        }}
-                    }})()
-                """)
-                await page.wait_for_timeout(1000)
-
-                # Step 4: Click the sport option
-                await page.evaluate(f"""
-                    (() => {{
-                        const btns = document.querySelectorAll("button.filter-button");
-                        const sportBtn = btns[{sport_idx}];
-                        const parent = sportBtn.parentElement;
-                        const dropdown = parent.querySelector(".dropdown-menu");
-                        if (!dropdown) return;
-                        const items = dropdown.querySelectorAll(".suggestion-button");
-                        for (const item of items) {{
-                            const txt = item.innerText.toLowerCase().trim();
-                            if (txt === "{sport_filter.lower()}") {{
-                                item.click();
-                                return;
-                            }}
-                        }}
-                        // Fallback to partial match
-                        for (const item of items) {{
-                            const txt = item.innerText.toLowerCase().trim();
-                            if (txt.includes("{sport_filter.lower()}") && !txt.includes("american") && !txt.includes("australian")) {{
-                                item.click();
-                                return;
-                            }}
-                        }}
-                    }})()
-                """)
-                await page.wait_for_timeout(1000)
-
-                # Step 5: Click Apply filters
-                await page.evaluate("""
-                    (() => {
-                        const btns = document.querySelectorAll("button");
-                        for (const btn of btns) {
-                            if (btn.innerText.toLowerCase().includes("apply filter")) {
-                                btn.click();
-                                return;
+                        const results = [];
+                        // SharePoint document library renders links in various ways
+                        const links = document.querySelectorAll('a[href*=".pdf"], a[href*="CAS"], a[href*="/Shared"]');
+                        for (const link of links) {
+                            const href = link.getAttribute('href') || '';
+                            const text = link.innerText.trim();
+                            if (text && text.length > 5 && (href.includes('.pdf') || /CAS\\s*\\d/.test(text))) {
+                                results.push({href, text: text.substring(0, 200)});
                             }
                         }
+                        // Also try table rows (SharePoint list view)
+                        const rows = document.querySelectorAll('tr[class*="ms-itmhover"], tr.ms-listviewitem');
+                        for (const row of rows) {
+                            const link = row.querySelector('a');
+                            if (link) {
+                                results.push({
+                                    href: link.getAttribute('href') || '',
+                                    text: row.innerText.trim().substring(0, 200)
+                                });
+                            }
+                        }
+                        return results;
                     })()
                 """)
-                await page.wait_for_timeout(8000)
 
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=20000)
-                except:
-                    pass
+                if not links_data:
+                    logger.warning("No document links found on CAS SharePoint page, trying table extraction")
+                    # Try extracting from table rows (CAS renders cases in tables)
+                    links_data = []
 
-                # Step 6: Extract cases from table
+                # Also try table-based extraction (CAS sometimes shows table view)
                 cases = await page.evaluate("""
                     (() => {
                         const rows = document.querySelectorAll("tr");
@@ -377,30 +310,20 @@ If a field is not visible or cannot be determined, use null.
                         for (const row of rows) {
                             const cells = row.querySelectorAll("td");
                             if (cells.length >= 6) {
-                                // Format: Lang, Year, Proc, Case number, Appellant, Respondent, Sport, Matter, Date, Outcome
-                                const lang = cells[0]?.innerText?.trim();
                                 const year = cells[1]?.innerText?.trim();
                                 const proc = cells[2]?.innerText?.trim();
                                 const caseNum = cells[3]?.innerText?.trim();
                                 const appellant = cells[4]?.innerText?.trim();
                                 const respondent = cells[5]?.innerText?.trim();
-                                const sport = cells[6]?.innerText?.trim();
-                                const matter = cells[7]?.innerText?.trim();
-                                const decisionDate = cells[8]?.innerText?.trim();
-                                const outcome = cells[9]?.innerText?.trim();
+                                const sport = cells[6]?.innerText?.trim() || '';
+                                const matter = cells[7]?.innerText?.trim() || '';
+                                const decisionDate = cells[8]?.innerText?.trim() || '';
 
-                                if (year && /^\\d{4}$/.test(year) && proc && /^[A-Z]$/.test(proc) && caseNum) {
+                                if (year && /^\\d{4}$/.test(year) && caseNum) {
                                     results.push({
-                                        caseNumber: `CAS ${year}/${proc}/${caseNum}`,
-                                        year: year,
-                                        proc: proc,
-                                        num: caseNum,
-                                        appellant: appellant,
-                                        respondent: respondent,
-                                        sport: sport,
-                                        matter: matter,
-                                        decisionDate: decisionDate,
-                                        outcome: outcome
+                                        caseNumber: `CAS ${year}/${proc || 'A'}/${caseNum}`,
+                                        year, proc: proc || 'A', num: caseNum,
+                                        appellant, respondent, sport, matter, decisionDate
                                     });
                                 }
                             }
@@ -409,7 +332,7 @@ If a field is not visible or cannot be determined, use null.
                     })()
                 """)
 
-                logger.info(f"CAS Playwright extraction: Found {len(cases)} cases from table")
+                logger.info(f"CAS Playwright: {len(cases)} cases from table, {len(links_data)} document links")
 
                 # Convert to domain objects
                 search_results = []
@@ -421,21 +344,17 @@ If a field is not visible or cannot be determined, use null.
                         continue
                     seen_cases.add(case_number)
 
-                    # Apply year filter if specified
                     if year and case.get("year") != str(year):
                         continue
 
-                    proc_type = case.get("proc", "")
                     appellant = case.get("appellant", "")
                     respondent = case.get("respondent", "")
                     parties = f"{appellant} v. {respondent}" if appellant and respondent else None
 
-                    # Parse decision date
                     fecha = None
                     date_str = case.get("decisionDate", "")
                     if date_str:
                         try:
-                            # Format: DD/MM/YYYY
                             parts = date_str.split("/")
                             if len(parts) == 3:
                                 fecha = FechaLaudo(
@@ -448,19 +367,25 @@ If a field is not visible or cannot be determined, use null.
                         numero_caso=NumeroCaso(valor=case_number),
                         titulo=parties or case_number,
                         fecha=fecha,
-                        categoria_deporte=self._parse_sport(case.get("sport", sport_filter)),
-                        tipo_procedimiento=self._parse_procedure_type(proc_type),
+                        categoria_deporte=self._parse_sport(case.get("sport", "")),
+                        tipo_procedimiento=self._parse_procedure_type(case.get("proc", "")),
                         partes=parties,
                         resumen=None,
                         url=None,
                     ))
 
+                # If no table results, try LLM extraction on rendered HTML
+                if not search_results:
+                    html = await page.content()
+                    logger.info("No table cases found, falling back to LLM extraction on rendered HTML")
+                    await context.close()
+                    await browser.close()
+                    return await self._search_basic()
+
                 return search_results, len(search_results) >= 20
 
             except Exception as e:
-                logger.error(f"CAS Playwright interaction error: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"CAS Playwright error: {e}")
                 return [], False
 
             finally:
@@ -520,7 +445,7 @@ If a field is not visible or cannot be determined, use null.
         year: Optional[int] = None,
         sport: Optional[str] = None,
         query: Optional[str] = None,
-        max_pages: int = 5,
+        max_pages: int = 250,
         max_results: Optional[int] = None,
     ) -> List[CASSearchResult]:
         """

@@ -72,8 +72,8 @@ class ExtractedBJVSearchResults(BaseModel):
         description="Total number of pages"
     )
     has_next_page: bool = Field(
-        default=False,
-        description="Whether there is a next page"
+        default=True,
+        description="Whether there is a next page (defaults to True to ensure pagination continues)"
     )
 
 
@@ -341,7 +341,7 @@ Extract every unique book you can find on the page.
         self,
         query: str,
         area: Optional[str] = None,
-        max_pages: int = 5,
+        max_pages: int = 500,
         max_results: Optional[int] = None,
     ) -> List[BJVSearchResult]:
         """

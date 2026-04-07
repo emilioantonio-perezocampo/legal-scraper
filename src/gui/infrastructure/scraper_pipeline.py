@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 class ScraperJobConfig:
     """Configuration for a scraper job."""
     source: str  # scjn, bjv, cas, dof
-    max_results: int = 100
+    max_results: int = 5000
     # Source-specific options
     category: Optional[str] = None  # SCJN
     scope: Optional[str] = None  # SCJN
@@ -464,15 +464,15 @@ async def create_scraper_schedule(
     """
     workflow_config = {"source": source, **(config or {})}
 
-    # Set defaults based on source
+    # Set defaults based on source — discover full corpus each run
     if source == "scjn":
-        workflow_config.setdefault("max_results", 100)
+        workflow_config.setdefault("max_results", 5000)
         workflow_config.setdefault("output_directory", "scjn_data")
     elif source == "bjv":
-        workflow_config.setdefault("max_results", 50)
+        workflow_config.setdefault("max_results", 5000)
         workflow_config.setdefault("output_directory", "bjv_data")
     elif source == "cas":
-        workflow_config.setdefault("max_results", 100)
+        workflow_config.setdefault("max_results", 5000)
     elif source == "dof":
         workflow_config.setdefault("mode", "today")
         workflow_config.setdefault("output_directory", "dof_data")

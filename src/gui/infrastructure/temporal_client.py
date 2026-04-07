@@ -74,7 +74,7 @@ class TemporalScraperClient:
         source_type: str,
         document_count: int,
         batch_size: int = 10,
-        max_documents: int = 100,
+        max_documents: int = 0,
     ) -> Optional[str]:
         """
         Trigger ScraperDocumentWorkflow for a completed scraper job.
@@ -84,7 +84,7 @@ class TemporalScraperClient:
             source_type: Source type (scjn, bjv, cas, dof)
             document_count: Number of documents to process
             batch_size: Documents per batch
-            max_documents: Maximum documents to process
+            max_documents: Maximum documents to process (0 = all unembedded)
 
         Returns:
             Workflow run ID if started, None if disabled or failed
@@ -99,12 +99,14 @@ class TemporalScraperClient:
 
         workflow_id = f"{self.WORKFLOW_ID_PREFIX}{job_id}"
 
+        effective_max = max_documents if max_documents > 0 else document_count
+
         workflow_input = {
             "job_id": job_id,
             "source_type": source_type,
             "document_ids": [],
             "batch_size": batch_size,
-            "max_documents": min(document_count, max_documents),
+            "max_documents": effective_max,
         }
 
         try:

@@ -148,36 +148,59 @@ class BJVDiscoveryActor(BJVBaseActor):
         """
         Discover books using LLM-based extraction.
 
-        Args:
-            msg: Search initiation message
+        Iterates through all legal areas when no specific area is requested,
+        to discover the full BJV corpus.
         """
         logger.info(f"Starting LLM-based BJV discovery: query={msg.query}")
 
         try:
-            # Use LLM parser with multi-page support
-            results = await self._llm_parser.search_multiple_pages(
-                query=msg.query or "derecho",
-                area=msg.area if hasattr(msg, 'area') else None,
-                max_pages=10,
-                max_results=self._max_resultados,
-            )
+            # If no specific area, iterate through all legal areas for full corpus
+            area = msg.area if hasattr(msg, 'area') else None
+            if area:
+                areas_to_search = [area]
+            else:
+                areas_to_search = [
+                    "civil", "penal", "constitucional", "administrativo",
+                    "mercantil", "laboral", "fiscal", "internacional", "general",
+                ]
 
-            # Emit discoveries
-            for result in results:
-                libro_id = result.libro_id.bjv_id
-                if self._register_discovery(libro_id):
-                    await self._emit_discovery(
-                        correlation_id=msg.correlation_id,
-                        libro_id=libro_id,
-                        titulo=result.titulo,
-                        url_detalle=result.url,
-                    )
+            for search_area in areas_to_search:
+                query = msg.query or "derecho"
+                pages_needed = max(50, (self._max_resultados + 9) // 10)
+
+                logger.info(f"BJV searching area: {search_area} (query={query})")
+                results = await self._llm_parser.search_multiple_pages(
+                    query=query,
+                    area=search_area,
+                    max_pages=pages_needed,
+                    max_results=self._max_resultados,
+                )
+
+                # Emit discoveries
+                area_found = 0
+                for result in results:
+                    libro_id = result.libro_id.bjv_id
+                    if self._register_discovery(libro_id):
+                        await self._emit_discovery(
+                            correlation_id=msg.correlation_id,
+                            libro_id=libro_id,
+                            titulo=result.titulo,
+                            url_detalle=result.url,
+                        )
+                        area_found += 1
+
+                logger.info(f"BJV area {search_area}: {area_found} new books (total: {len(self._discovered_ids)})")
+
+                # Check if we've hit the overall limit
+                if len(self._discovered_ids) >= self._max_resultados:
+                    logger.info(f"BJV reached max_resultados limit: {self._max_resultados}")
+                    break
 
             # Notify completion
             completion = BusquedaCompletada(
                 correlation_id=msg.correlation_id,
                 total_descubiertos=len(self._discovered_ids),
-                total_paginas=1,  # LLM parser handles pagination internally
+                total_paginas=len(areas_to_search),
             )
             await self._coordinator.tell(completion)
 

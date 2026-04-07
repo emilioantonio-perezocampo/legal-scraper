@@ -4,6 +4,22 @@
 :80 {
     encode gzip
 
+    # File Browser (Dufs — legal corpus file server with previews)
+    handle /files/* {
+        reverse_proxy legal-filebrowser:5000
+    }
+    handle /files {
+        redir /files/ permanent
+    }
+
+    # Inventory Dashboard (metadata + operational summary)
+    handle_path /inventory/* {
+        reverse_proxy legal-inventory:8050
+    }
+    handle /inventory {
+        redir /inventory/ permanent
+    }
+
     # API routes to FastAPI backend
     reverse_proxy /api/* api:8000
     reverse_proxy /downloads/* api:8000

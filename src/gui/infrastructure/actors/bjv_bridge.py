@@ -276,72 +276,170 @@ class BJVGuiBridgeActor(BaseActor):
             self._poll_task = None
 
     async def _poll_loop(self, config: BJVSearchConfig):
-        """Main polling loop for progress updates (simulated)."""
-        # Simulate discovering books
-        max_books = min(config.max_resultados, 50)  # Cap at 50 for demo
+        """Real BJV scraping using Playwright to render JS-heavy pages."""
+        import os
+        import re
+        logger = __import__('logging').getLogger(__name__)
 
-        while self._is_polling and self._current_job_id:
+        max_books = config.max_resultados
+        total_saved = 0
+        total_errors = 0
+
+        # Supabase client
+        supabase_client = None
+        sb_url = os.environ.get("SUPABASE_URL")
+        sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        if sb_url and sb_key:
             try:
-                if not self._is_paused:
-                    # Simulate discovery
-                    if self._simulated_discovered < max_books:
-                        self._simulated_discovered += 5
-                        self._simulated_discovered = min(self._simulated_discovered, max_books)
+                from supabase import create_client
+                supabase_client = create_client(sb_url, sb_key)
+            except Exception:
+                pass
 
-                    # Simulate downloads (lag behind discovery)
-                    if self._simulated_downloaded < self._simulated_discovered:
-                        self._simulated_downloaded += 2
-                        self._simulated_downloaded = min(
-                            self._simulated_downloaded,
-                            self._simulated_discovered
-                        )
+        # Legal areas to search across
+        areas = ["civil", "penal", "constitucional", "administrativo",
+                 "mercantil", "laboral", "fiscal", "internacional"]
+        if config.area:
+            areas = [config.area]
 
-                # Update progress
-                pending = self._simulated_discovered - self._simulated_downloaded
-                self._current_progress = BJVProgress(
-                    libros_descubiertos=self._simulated_discovered,
-                    libros_descargados=self._simulated_downloaded,
-                    libros_pendientes=pending,
-                    descargas_activas=min(2, pending) if not self._is_paused else 0,
-                    errores=0,
-                    estado="PAUSED" if self._is_paused else "RUNNING",
+        query = config.query or "derecho"
+
+        try:
+            from playwright.async_api import async_playwright
+
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                )
+                context = await browser.new_context(
+                    viewport={"width": 1920, "height": 1080},
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                 )
 
-                # Emit progress event
-                if self._event_handler:
-                    await self._emit_event(BJVJobProgress(
-                        job_id=self._current_job_id,
-                        progress=self._current_progress,
-                    ))
+                for area in areas:
+                    if total_saved >= max_books:
+                        break
 
-                # Check for completion
-                if (
-                    self._simulated_discovered >= max_books and
-                    self._simulated_downloaded >= self._simulated_discovered
-                ):
-                    # Job completed
-                    await self._emit_event(BJVJobCompleted(
-                        job_id=self._current_job_id,
-                        total_libros_descubiertos=self._simulated_discovered,
-                        total_libros_descargados=self._simulated_downloaded,
-                        total_errores=0,
-                    ))
-                    self._current_job_id = None
-                    self._is_polling = False
-                    break
+                    page_num = 1
+                    while page_num <= 50 and total_saved < max_books:
+                        if not self._is_polling:
+                            break
 
-                await asyncio.sleep(self._poll_interval)
+                        url = f"https://biblio.juridicas.unam.mx/bjv/resultados?ti={query}&area={area}&pagina={page_num}"
+                        page = await context.new_page()
+                        try:
+                            await page.goto(url, timeout=30000)
+                            await page.wait_for_load_state("networkidle", timeout=15000)
+                            await asyncio.sleep(3)
 
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                # Emit failure event
-                if self._current_job_id and self._event_handler:
-                    await self._emit_event(BJVJobFailed(
-                        job_id=self._current_job_id,
-                        mensaje_error=str(e),
-                    ))
-                break
+                            # Extract book data from rendered page
+                            books = await page.evaluate("""
+                                () => {
+                                    const results = [];
+                                    // BJV renders book cards with links
+                                    const items = document.querySelectorAll('.resultado-item, .libro-card, .card, article, .item-resultado, [class*="result"]');
+                                    for (const item of items) {
+                                        const link = item.querySelector('a[href*="libro"], a[href*="detalle"]');
+                                        const title = item.querySelector('h2, h3, h4, .titulo, .title');
+                                        if (link || title) {
+                                            results.push({
+                                                href: link ? link.getAttribute('href') : '',
+                                                title: (title || link || item).innerText.trim().substring(0, 300),
+                                            });
+                                        }
+                                    }
+                                    // Fallback: any links with libro/detalle
+                                    if (results.length === 0) {
+                                        const links = document.querySelectorAll('a');
+                                        for (const l of links) {
+                                            const href = l.getAttribute('href') || '';
+                                            const text = l.innerText.trim();
+                                            if (text.length > 10 && (href.includes('libro') || href.includes('detalle'))) {
+                                                results.push({href, title: text.substring(0, 300)});
+                                            }
+                                        }
+                                    }
+                                    // Check for next page
+                                    const hasNext = !!document.querySelector('a[href*="pagina=' + (arguments[0] + 1) + '"], .pagination .next, [class*="next"]');
+                                    return {books: results, hasNext};
+                                }
+                            """)
+
+                            page_books = books.get("books", [])
+                            has_next = books.get("hasNext", False)
+
+                            for book in page_books:
+                                if total_saved >= max_books:
+                                    break
+                                title = book.get("title", "").strip()
+                                href = book.get("href", "")
+                                ext_id = re.findall(r'/(\d+)', href)
+                                ext_id = ext_id[0] if ext_id else f"bjv-{area}-{page_num}-{total_saved}"
+
+                                if supabase_client and title:
+                                    try:
+                                        supabase_client.table("scraper_documents").upsert({
+                                            "source_type": "bjv",
+                                            "external_id": str(ext_id),
+                                            "title": title[:500],
+                                            "embedding_status": "pending",
+                                        }, on_conflict="source_type,external_id").execute()
+                                        total_saved += 1
+                                    except Exception:
+                                        total_errors += 1
+
+                            logger.info(f"BJV {area} p{page_num}: {len(page_books)} books (total: {total_saved})")
+
+                            # Update progress
+                            self._simulated_discovered = total_saved
+                            self._simulated_downloaded = total_saved
+                            self._current_progress = BJVProgress(
+                                libros_descubiertos=total_saved,
+                                libros_descargados=total_saved,
+                                libros_pendientes=0,
+                                descargas_activas=1,
+                                errores=total_errors,
+                                estado="RUNNING",
+                            )
+                            if self._event_handler:
+                                await self._emit_event(BJVJobProgress(
+                                    job_id=self._current_job_id,
+                                    progress=self._current_progress,
+                                ))
+
+                            if not page_books or not has_next:
+                                break
+                            page_num += 1
+
+                        except Exception as e:
+                            logger.warning(f"BJV page error {area} p{page_num}: {e}")
+                            total_errors += 1
+                            break
+                        finally:
+                            await page.close()
+
+                        await asyncio.sleep(2)  # Rate limit
+
+                await browser.close()
+
+        except ImportError:
+            logger.error("Playwright not available for BJV scraping")
+        except Exception as e:
+            logger.error(f"BJV scrape failed: {e}")
+
+        # Emit completion
+        if self._event_handler and self._current_job_id:
+            await self._emit_event(BJVJobCompleted(
+                job_id=self._current_job_id,
+                total_libros_descubiertos=total_saved,
+                total_libros_descargados=total_saved,
+                total_errores=total_errors,
+            ))
+        self._current_job_id = None
+        self._is_polling = False
+        logger.info(f"BJV scrape complete: {total_saved} books, {total_errors} errors")
+        return
 
     async def _emit_event(self, event: Any):
         """Emit event to handler."""

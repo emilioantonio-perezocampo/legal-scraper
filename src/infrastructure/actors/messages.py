@@ -47,8 +47,8 @@ class DescubrirDocumentos(ActorMessage):
     category: Optional[str] = None
     scope: Optional[str] = None
     status: Optional[str] = None
-    max_results: int = 100
-    discover_all_pages: bool = False
+    max_results: int = 5000
+    discover_all_pages: bool = True
 
 
 @dataclass(frozen=True)

@@ -45,8 +45,7 @@ from src.gui.infrastructure.crawl4ai_activities import (
 from src.gui.infrastructure.scraper_document_workflow import (
     ScraperDocumentWorkflow,
     fetch_documents_for_embedding,
-    generate_embeddings_batch,
-    store_embeddings,
+    generate_and_store_embeddings,
 )
 
 logging.basicConfig(
@@ -95,8 +94,7 @@ async def run_worker():
             download_documents_pdfs,
             # Document embedding activities
             fetch_documents_for_embedding,
-            generate_embeddings_batch,
-            store_embeddings,
+            generate_and_store_embeddings,
         ],
     )
 

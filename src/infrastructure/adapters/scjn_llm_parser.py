@@ -275,7 +275,7 @@ Look for patterns in the HTML like tables, divs with document listings, links wi
 
     async def parse_multiple_pages(
         self,
-        max_pages: int = 5,
+        max_pages: int = 500,
         max_results: Optional[int] = None,
         category: Optional[str] = None,
         scope: Optional[str] = None,
