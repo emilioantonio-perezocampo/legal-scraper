@@ -35,11 +35,14 @@ services:
       - SUPABASE_DB_NAME=${SUPABASE_DB_NAME:-postgres}
       - SUPABASE_DB_PASSWORD=${SUPABASE_DB_PASSWORD}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - SCRAPER_PDF_BUCKET=${SCRAPER_PDF_BUCKET:-legal-scraper-pdfs}
+      - SCRAPER_MOUNTED_DATA_ROOT=/app/mounted_data
     volumes:
       - ./scraped_data:/app/scraped_data
       - ./scjn_data:/app/scjn_data
       - ./bjv_data:/app/bjv_data
       - ./checkpoints:/app/checkpoints
+      - /mnt/HC_Volume_103359368/dev/data:/app/mounted_data:ro
     command: python src/gui/launcher.py --mode web --host 0.0.0.0 --port 8000
     expose:
       - "8000"
@@ -60,6 +63,7 @@ services:
       - legaltracking-dev_default
     volumes:
       - /mnt/HC_Volume_103359368/dev/data/dof:/app/dof_data
+      - /mnt/HC_Volume_103359368/dev/data:/app/mounted_data:ro
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=America/Mexico_City
@@ -79,6 +83,7 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SCRAPER_PDF_BUCKET=${SCRAPER_PDF_BUCKET:-legal-scraper-pdfs}
+      - SCRAPER_MOUNTED_DATA_ROOT=/app/mounted_data
     command: python -m src.gui.infrastructure.scraper_worker
     depends_on:
       - api

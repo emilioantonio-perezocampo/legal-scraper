@@ -29,6 +29,7 @@ dependencies:
       - pdfplumber       # Primary PDF text extraction
       - pypdf            # Fallback PDF processing
       - pymupdf          # Fast PDF extraction (BJV)
+      - pymupdf4llm==1.27.2.2  # Routed PDF extraction + local OCR for Biblio
       # Embeddings & Vector Search
       - faiss-cpu        # Vector similarity search
       - sentence-transformers  # Text embedding models
@@ -45,3 +46,16 @@ dependencies:
       - temporalio>=1.7.0
       # Supabase client for document persistence and embeddings
       - supabase>=2.0.0    # Temporal workflow SDK
+      # Production file conversion for chunking.
+      # CAS/TAS benchmark challengers need the local inference package so
+      # `partition_pdf(..., strategy="fast"|"hi_res")` can run fully self-hosted
+      # without pulling unrelated hosted-service extras.
+      - unstructured==0.22.18
+      - unstructured-inference
+      # Local structured challenger for PDF conversion/chunking benchmarks.
+      - docling
+      - markdown>=3.10,<4.0
+      - pdf2image>=1.17.0,<2.0.0
+      - pdfminer-six>=20251230,<20270000
+      - pi-heif>=1.2.0,<2.0.0
+      - pikepdf>=10.3.0,<11.0.0

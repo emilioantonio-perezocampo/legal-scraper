@@ -10,6 +10,7 @@ Provides endpoints for:
 """
 import asyncio
 import os
+import uuid
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -410,6 +411,7 @@ class ScraperAPI:
         self._dof_bridge: Optional[DOFGuiBridgeActor] = None
         self._dof_logs: List[dict] = []
         self._temporal_client = get_temporal_client()
+        self._source_workflows: dict[str, str] = {}
         # n8n callback URL storage: workflow_id -> callback_url
         self._n8n_callbacks: dict[str, str] = {}
 
@@ -432,6 +434,76 @@ class ScraperAPI:
     @property
     def dof_bridge(self) -> Optional[DOFGuiBridgeActor]:
         return self._dof_bridge
+
+    async def start_source_workflow(self, source: str, config: dict) -> Optional[str]:
+        """Prefer the durable Crawl4AI workflow path for source ingestion."""
+        try:
+            from temporalio.client import Client
+            from src.gui.infrastructure.crawl4ai_workflow import Crawl4AIExtractionWorkflow
+
+            temporal_address = os.environ.get("TEMPORAL_ADDRESS", "temporal-temporal-1:7233")
+            namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")
+            task_queue = os.environ.get("TEMPORAL_TASK_QUEUE", "scraper-pipeline")
+
+            client = await Client.connect(temporal_address, namespace=namespace)
+            workflow_id = f"{source}-crawl4ai-web-{uuid.uuid4().hex[:10]}"
+            workflow_config = {
+                **config,
+                "source": source,
+                "download_pdfs": config.get("download_pdfs", True),
+                "upload_to_storage": True,
+                "persist_to_db": True,
+                "trigger_embedding": True,
+            }
+            await client.start_workflow(
+                Crawl4AIExtractionWorkflow.run,
+                args=[workflow_config],
+                id=workflow_id,
+                task_queue=task_queue,
+            )
+            self._source_workflows[source] = workflow_id
+            return workflow_id
+        except Exception as exc:
+            logger.warning("Falling back to legacy %s bridge start path: %s", source, exc)
+            return None
+
+    async def get_source_workflow_status(self, source: str) -> Optional[dict]:
+        """Return latest workflow-backed status for a source if one was started."""
+        workflow_id = self._source_workflows.get(source)
+        if not workflow_id:
+            return None
+
+        try:
+            from temporalio.client import Client
+
+            temporal_address = os.environ.get("TEMPORAL_ADDRESS", "temporal-temporal-1:7233")
+            namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")
+            client = await Client.connect(temporal_address, namespace=namespace)
+            handle = client.get_workflow_handle(workflow_id)
+            desc = await handle.describe()
+            raw_status = desc.status.name.upper()
+            status_map = {
+                "RUNNING": "running",
+                "COMPLETED": "completed",
+                "FAILED": "failed",
+                "CANCELED": "cancelled",
+                "TERMINATED": "cancelled",
+            }
+            status = status_map.get(raw_status, raw_status.lower())
+            result = None
+            if status in {"completed", "failed", "cancelled"}:
+                try:
+                    result = await handle.result()
+                except Exception as exc:
+                    result = {"errors": [str(exc)]}
+            return {
+                "workflow_id": workflow_id,
+                "status": status,
+                "result": result,
+            }
+        except Exception as exc:
+            logger.warning("Could not query %s workflow %s: %s", source, workflow_id, exc)
+            return None
 
     async def startup(self):
         """Start the scraper service and bridges."""
@@ -1335,6 +1407,26 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
     )
     async def get_scjn_status():
         """Get current SCJN job status."""
+        workflow_status = await api.get_source_workflow_status("scjn")
+        if workflow_status:
+            result = workflow_status.get("result") or {}
+            download = result.get("download") or {}
+            document_count = result.get("document_count", 0)
+            downloaded_count = download.get("downloaded_count", 0)
+            return SCJNStatusResponse(
+                status=workflow_status["status"],
+                job_id=workflow_status["workflow_id"],
+                connected=True,
+                progress={
+                    "discovered_count": document_count,
+                    "downloaded_count": downloaded_count,
+                    "pending_count": max(0, document_count - downloaded_count),
+                    "active_downloads": 1 if workflow_status["status"] == "running" else 0,
+                    "error_count": len(result.get("errors", []) or []),
+                    "state": workflow_status["status"].upper(),
+                },
+            )
+
         if not api.scjn_bridge:
             return SCJNStatusResponse(status="not_initialized", connected=False)
 
@@ -1371,6 +1463,24 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
     )
     async def start_scjn_scraping(request: SCJNStartRequest):
         """Start a new SCJN scraping job."""
+        workflow_id = await api.start_source_workflow(
+            "scjn",
+            {
+                "max_results": request.max_results,
+                "category": request.category,
+                "scope": request.scope,
+                "output_directory": request.output_directory,
+            },
+        )
+        if workflow_id:
+            api._scjn_logs.append({
+                "level": "info",
+                "message": f"Starting SCJN Crawl4AI workflow (category={request.category}, scope={request.scope})",
+                "source": "SCJN",
+                "timestamp": __import__('datetime').datetime.now().isoformat()
+            })
+            return StartJobResponse(success=True, job_id=workflow_id)
+
         if not api.scjn_bridge:
             return StartJobResponse(success=False, error="SCJN bridge not initialized")
 
@@ -1496,6 +1606,27 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
     )
     async def get_bjv_status():
         """Get current BJV job status."""
+        workflow_status = await api.get_source_workflow_status("bjv")
+        if workflow_status:
+            result = workflow_status.get("result") or {}
+            download = result.get("download") or {}
+            document_count = result.get("document_count", 0)
+            downloaded_count = download.get("downloaded_count", 0)
+            progress = {
+                "libros_descubiertos": document_count,
+                "libros_descargados": downloaded_count,
+                "libros_pendientes": max(0, document_count - downloaded_count),
+                "descargas_activas": 1 if workflow_status["status"] == "running" else 0,
+                "errores": len(result.get("errors", []) or []),
+                "estado": workflow_status["status"].upper(),
+            }
+            return BJVStatusResponse(
+                status=workflow_status["status"],
+                job_id=workflow_status["workflow_id"],
+                connected=True,
+                progress=progress,
+            )
+
         if not api.bjv_bridge:
             return BJVStatusResponse(status="not_initialized", connected=False)
 
@@ -1530,6 +1661,25 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
     )
     async def start_bjv_scraping(request: BJVStartRequest):
         """Start a new BJV scraping job."""
+        workflow_id = await api.start_source_workflow(
+            "bjv",
+            {
+                "max_results": request.max_resultados,
+                "search_term": request.termino_busqueda,
+                "area": request.area_derecho,
+                "output_directory": request.output_directory,
+                "download_pdfs": request.descargar_pdfs,
+            },
+        )
+        if workflow_id:
+            api._bjv_logs.append({
+                "level": "info",
+                "message": f"Starting BJV Crawl4AI workflow (term={request.termino_busqueda}, area={request.area_derecho})",
+                "source": "BJV",
+                "timestamp": __import__('datetime').datetime.now().isoformat()
+            })
+            return StartJobResponse(success=True, job_id=workflow_id)
+
         if not api.bjv_bridge:
             return StartJobResponse(success=False, error="BJV bridge not initialized")
 
@@ -1663,6 +1813,23 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
     )
     async def get_cas_status():
         """Get CAS scraper job status."""
+        workflow_status = await api.get_source_workflow_status("cas")
+        if workflow_status:
+            result = workflow_status.get("result") or {}
+            download = result.get("download") or {}
+            document_count = result.get("document_count", 0)
+            downloaded_count = download.get("downloaded_count", 0)
+            return CASStatusResponse(
+                status=workflow_status["status"],
+                job_id=workflow_status["workflow_id"],
+                progress={
+                    "discovered": document_count,
+                    "downloaded": downloaded_count,
+                    "processed": document_count if workflow_status["status"] == "completed" else downloaded_count,
+                    "errors": len(result.get("errors", []) or []),
+                },
+            )
+
         if not api.cas_bridge:
             return CASStatusResponse(status="idle")
 
@@ -1726,6 +1893,26 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
     )
     async def start_cas_scraping(request: CASStartRequest):
         """Start a new CAS scraping job."""
+        workflow_id = await api.start_source_workflow(
+            "cas",
+            {
+                "max_results": request.max_results,
+                "year_from": request.year_from,
+                "year_to": request.year_to,
+                "sport": request.sport,
+                "matter": request.matter,
+                "output_directory": "cas_data",
+            },
+        )
+        if workflow_id:
+            api._cas_logs.append({
+                "level": "info",
+                "message": f"Starting CAS Crawl4AI workflow (sport={request.sport}, matter={request.matter})",
+                "source": "CAS",
+                "timestamp": __import__('datetime').datetime.now().isoformat()
+            })
+            return StartJobResponse(success=True, job_id=workflow_id)
+
         if not api.cas_bridge:
             return StartJobResponse(success=False, error="CAS bridge not initialized")
 
@@ -1842,6 +2029,23 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
     )
     async def get_dof_status():
         """Get DOF scraper job status."""
+        workflow_status = await api.get_source_workflow_status("dof")
+        if workflow_status:
+            result = workflow_status.get("result") or {}
+            download = result.get("download") or {}
+            document_count = result.get("document_count", 0)
+            downloaded_count = download.get("downloaded_count", 0)
+            return DOFStatusResponse(
+                status=workflow_status["status"],
+                job_id=workflow_status["workflow_id"],
+                progress={
+                    "total_documents": document_count,
+                    "processed_documents": downloaded_count if workflow_status["status"] != "completed" else document_count,
+                    "downloaded_count": downloaded_count,
+                    "errors": len(result.get("errors", []) or []),
+                },
+            )
+
         if not api.dof_bridge:
             return DOFStatusResponse(status="idle")
 
@@ -1899,6 +2103,26 @@ def create_app(service: Optional[ScraperService] = None) -> FastAPI:
                     status_code=400,
                     detail="start_date and end_date are required for range mode"
                 )
+
+        workflow_id = await api.start_source_workflow(
+            "dof",
+            {
+                "mode": request.mode,
+                "start_date": request.start_date,
+                "end_date": request.end_date,
+                "section": request.section,
+                "output_directory": request.output_directory,
+                "download_pdfs": request.download_pdfs,
+            },
+        )
+        if workflow_id:
+            api._dof_logs.append({
+                "level": "info",
+                "message": f"Starting DOF Crawl4AI workflow (mode={request.mode}, section={request.section})",
+                "source": "DOF",
+                "timestamp": __import__('datetime').datetime.now().isoformat()
+            })
+            return StartJobResponse(success=True, job_id=workflow_id)
 
         if not api.dof_bridge:
             return StartJobResponse(success=False, error="DOF bridge not initialized")

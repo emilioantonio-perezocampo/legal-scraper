@@ -188,7 +188,6 @@ class DOFGuiBridgeActor:
                                                     "external_id": ext_id,
                                                     "title": title,
                                                     "publication_date": str(target_date),
-                                                    "embedding_status": "pending",
                                                 }, on_conflict="source_type,external_id").execute()
                                                 total_saved += 1
                                             except Exception as e:

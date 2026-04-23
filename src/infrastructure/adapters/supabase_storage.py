@@ -112,6 +112,7 @@ class SupabaseStorageAdapter:
         source_type: str,
         doc_id: str,
         content_type: str = "application/pdf",
+        file_extension: Optional[str] = None,
         tenant_id: Optional[str] = None,
     ) -> str:
         """
@@ -122,24 +123,17 @@ class SupabaseStorageAdapter:
             source_type: Document source (scjn, bjv, cas, dof)
             doc_id: Document identifier
             content_type: MIME type (default: application/pdf)
+            file_extension: Optional explicit file extension for the storage path
             tenant_id: Optional tenant identifier for scoped storage
 
         Returns:
             Storage path of the uploaded file
         """
-        # Map MIME type to extension
-        extension_map = {
-            "application/pdf": ".pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-            "application/msword": ".doc",
-            "text/html": ".html",
-        }
-        extension = extension_map.get(content_type, ".pdf")
-
-        path = self._generate_path(
+        path = self.build_path(
             source_type=source_type,
             doc_id=doc_id,
-            extension=extension,
+            content_type=content_type,
+            file_extension=file_extension,
             tenant_id=tenant_id,
         )
 
@@ -151,6 +145,33 @@ class SupabaseStorageAdapter:
         )
 
         return path
+
+    def build_path(
+        self,
+        source_type: str,
+        doc_id: str,
+        content_type: str = "application/pdf",
+        file_extension: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+    ) -> str:
+        """Build the deterministic storage path for a file without uploading it."""
+        # Map MIME type to extension
+        extension_map = {
+            "application/pdf": ".pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+            "application/msword": ".doc",
+            "text/html": ".html",
+            "text/plain": ".txt",
+            "text/markdown": ".md",
+        }
+        extension = file_extension or extension_map.get(content_type, ".pdf")
+
+        return self._generate_path(
+            source_type=source_type,
+            doc_id=doc_id,
+            extension=extension,
+            tenant_id=tenant_id,
+        )
 
     async def download(self, path: str) -> bytes:
         """

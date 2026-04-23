@@ -16,8 +16,11 @@ Usage:
 """
 import argparse
 import asyncio
+import json
 import os
 import sys
+from pathlib import Path
+from datetime import timedelta
 
 from temporalio.client import Client
 
@@ -33,6 +36,26 @@ from src.gui.infrastructure.scraper_pipeline import (
 from src.gui.infrastructure.crawl4ai_workflow import (
     Crawl4AIExtractionWorkflow,
     create_crawl4ai_schedule,
+)
+from src.gui.infrastructure.mounted_backfill_workflow import (
+    MountedBackfillDrainWorkflow,
+)
+from src.gui.infrastructure.mounted_disk_backfill import (
+    SUPPORTED_BACKFILL_SOURCES,
+    backfill_source_from_mounted_disk,
+    backfill_source_from_mounted_disk_until_exhausted,
+)
+from src.gui.infrastructure.cas_chunk_benchmark import (
+    DEFAULT_CORE_CANDIDATES,
+    OPTIONAL_CANDIDATES,
+    run_benchmark,
+)
+from src.gui.infrastructure.biblio_chunk_benchmark import (
+    DEFAULT_CLASSIFIERS as BIBLIO_DEFAULT_CLASSIFIERS,
+    DEFAULT_CORE_CANDIDATES as BIBLIO_DEFAULT_CORE_CANDIDATES,
+    OPTIONAL_CANDIDATES as BIBLIO_OPTIONAL_CANDIDATES,
+    OPTIONAL_CLASSIFIERS as BIBLIO_OPTIONAL_CLASSIFIERS,
+    run_benchmark as run_biblio_benchmark,
 )
 
 
@@ -204,6 +227,133 @@ async def cmd_status(args):
         sys.exit(1)
 
 
+async def cmd_backfill_mounted(args):
+    """Backfill mounted-disk source files into storage and queue indexing."""
+    sources = list(SUPPORTED_BACKFILL_SOURCES) if args.source == "all" else [args.source]
+    results = []
+    client = await get_client() if args.via_temporal else None
+    task_queue = os.environ.get("TEMPORAL_TASK_QUEUE", "scraper-pipeline") if args.via_temporal else None
+
+    for source in sources:
+        print(f"Backfilling mounted data for {source}...")
+        if args.via_temporal:
+            workflow_id = f"mounted-backfill-drain-{source}"
+            workflow_config = {
+                "source": source,
+                "limit": args.limit,
+                "include_existing_storage": not args.only_missing_storage,
+                "bootstrap_missing_documents": not args.no_bootstrap_registration,
+                "trigger_embedding": not args.no_trigger_embedding,
+                "data_root": args.data_root,
+                "max_passes": args.max_passes,
+                "sleep_between_passes": args.sleep_between_passes,
+            }
+            try:
+                handle = await client.start_workflow(
+                    MountedBackfillDrainWorkflow.run,
+                    args=[workflow_config],
+                    id=workflow_id,
+                    task_queue=task_queue,
+                    task_timeout=timedelta(minutes=2),
+                )
+                started = {
+                    "workflow_id": workflow_id,
+                    "run_id": handle.result_run_id,
+                    "source": source,
+                    "status": "started",
+                }
+            except Exception as exc:
+                if "already started" not in str(exc).lower():
+                    raise
+                handle = client.get_workflow_handle(workflow_id)
+                started = {
+                    "workflow_id": workflow_id,
+                    "source": source,
+                    "status": "already_running",
+                }
+
+            if args.wait:
+                started["result"] = await handle.result()
+            results.append(started)
+            print(json.dumps(started, ensure_ascii=False, indent=2))
+            if args.sleep_between_sources and source != sources[-1]:
+                await asyncio.sleep(args.sleep_between_sources)
+            continue
+
+        if args.until_exhausted:
+            result = await backfill_source_from_mounted_disk_until_exhausted(
+                source=source,
+                limit=args.limit,
+                include_existing_storage=not args.only_missing_storage,
+                bootstrap_missing_documents=not args.no_bootstrap_registration,
+                trigger_embedding=not args.no_trigger_embedding,
+                wait_for_workflow=args.wait,
+                data_root=args.data_root,
+                max_passes=args.max_passes,
+                sleep_between_passes=args.sleep_between_passes,
+            )
+        else:
+            result = await backfill_source_from_mounted_disk(
+                source=source,
+                limit=args.limit,
+                include_existing_storage=not args.only_missing_storage,
+                bootstrap_missing_documents=not args.no_bootstrap_registration,
+                trigger_embedding=not args.no_trigger_embedding,
+                wait_for_workflow=args.wait,
+                data_root=args.data_root,
+            )
+        results.append(result.to_dict())
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+
+        if args.sleep_between_sources and source != sources[-1]:
+            await asyncio.sleep(args.sleep_between_sources)
+
+
+async def cmd_benchmark_cas(args):
+    """Run the CAS/TAS chunking benchmark harness."""
+    output_dir = Path(os.path.abspath(args.output_dir))
+    candidate_ids = [candidate.strip() for candidate in args.candidates.split(",") if candidate.strip()] if args.candidates else None
+    doc_ids = [doc_id.strip() for doc_id in args.doc_ids.split(",") if doc_id.strip()] if args.doc_ids else None
+    results = run_benchmark(
+        output_dir=output_dir,
+        data_root=Path(args.data_root),
+        smoke_size=args.smoke_size,
+        tuning_size=args.tuning_size,
+        holdout_size=args.holdout_size,
+        seed=args.seed,
+        candidate_ids=candidate_ids,
+        doc_ids=doc_ids,
+        mode=args.mode,
+        candidate_set=args.candidate_set,
+        difficult_subset_size=args.difficult_subset_size,
+        include_optional=args.include_optional,
+        include_pdf_info=not args.skip_pdf_info,
+    )
+    print(json.dumps(results, ensure_ascii=False, indent=2))
+
+
+async def cmd_benchmark_biblio(args):
+    """Run the Biblio UNAM chunking and classification benchmark harness."""
+    output_dir = Path(os.path.abspath(args.output_dir))
+    candidate_ids = [candidate.strip() for candidate in args.candidates.split(",") if candidate.strip()]
+    classifier_ids = [classifier.strip() for classifier in args.classifiers.split(",") if classifier.strip()]
+    family_ids = [family_id.strip() for family_id in args.family_ids.split(",") if family_id.strip()] if args.family_ids else None
+    results = run_biblio_benchmark(
+        output_dir=output_dir,
+        data_root=Path(args.data_root),
+        smoke_size=args.smoke_size,
+        tuning_size=args.tuning_size,
+        holdout_size=args.holdout_size,
+        seed=args.seed,
+        candidate_ids=candidate_ids,
+        classifier_ids=classifier_ids,
+        family_ids=family_ids,
+        include_optional=args.include_optional,
+        include_pdf_info=not args.skip_pdf_info,
+    )
+    print(json.dumps(results, ensure_ascii=False, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Scraper Pipeline CLI")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
@@ -254,6 +404,228 @@ def main():
     status_parser = subparsers.add_parser("status", help="Get workflow status")
     status_parser.add_argument("workflow_id", help="Workflow ID")
     status_parser.set_defaults(func=cmd_status)
+
+    # Mounted-disk backfill command
+    backfill_parser = subparsers.add_parser(
+        "backfill-mounted",
+        help="Hydrate storage from mounted disk and queue embeddings",
+    )
+    backfill_parser.add_argument(
+        "source",
+        choices=["all", *SUPPORTED_BACKFILL_SOURCES],
+        help="Source to process, or 'all' to run every supported source",
+    )
+    backfill_parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum non-complete documents to process per source",
+    )
+    backfill_parser.add_argument(
+        "--data-root",
+        default=os.environ.get("SCRAPER_MOUNTED_DATA_ROOT", "/app/mounted_data"),
+        help="Mounted data root visible to this process",
+    )
+    backfill_parser.add_argument(
+        "--only-missing-storage",
+        action="store_true",
+        help="Skip docs that already have storage_path and only hydrate missing files",
+    )
+    backfill_parser.add_argument(
+        "--no-bootstrap-registration",
+        action="store_true",
+        help="Do not scan mounted data to create missing scraper_documents rows before hydrating",
+    )
+    backfill_parser.add_argument(
+        "--no-trigger-embedding",
+        action="store_true",
+        help="Do not start the embedding workflow after hydrating files",
+    )
+    backfill_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="Wait for the triggered embedding workflow to complete",
+    )
+    backfill_parser.add_argument(
+        "--until-exhausted",
+        action="store_true",
+        help="Repeat hydration passes until no missing-storage docs remain or progress stalls",
+    )
+    backfill_parser.add_argument(
+        "--max-passes",
+        type=int,
+        help="Maximum number of passes when --until-exhausted is enabled",
+    )
+    backfill_parser.add_argument(
+        "--sleep-between-passes",
+        type=float,
+        default=0.0,
+        help="Optional pause in seconds between repeated passes for the same source",
+    )
+    backfill_parser.add_argument(
+        "--sleep-between-sources",
+        type=float,
+        default=0.0,
+        help="Optional pause in seconds between sources when source=all",
+    )
+    backfill_parser.add_argument(
+        "--via-temporal",
+        action="store_true",
+        help="Run the mounted-data drain as a durable Temporal workflow instead of inline",
+    )
+    backfill_parser.set_defaults(func=cmd_backfill_mounted)
+
+    benchmark_parser = subparsers.add_parser(
+        "benchmark-cas",
+        help="Benchmark CAS/TAS extraction and chunking strategies",
+    )
+    benchmark_parser.add_argument(
+        "--output-dir",
+        default="/tmp/cas_chunk_benchmark",
+        help="Directory where benchmark artifacts will be written",
+    )
+    benchmark_parser.add_argument(
+        "--data-root",
+        default=os.environ.get("SCRAPER_MOUNTED_DATA_ROOT", "/app/mounted_data"),
+        help="Mounted corpus root containing cas_pdfs and cas/converted",
+    )
+    benchmark_parser.add_argument(
+        "--smoke-size",
+        type=int,
+        default=40,
+        help="Number of documents in the smoke split",
+    )
+    benchmark_parser.add_argument(
+        "--tuning-size",
+        type=int,
+        default=120,
+        help="Number of documents in the tuning split",
+    )
+    benchmark_parser.add_argument(
+        "--holdout-size",
+        type=int,
+        default=60,
+        help="Number of documents in the holdout split",
+    )
+    benchmark_parser.add_argument(
+        "--seed",
+        type=int,
+        default=20260412,
+        help="Random seed for stratified sampling",
+    )
+    benchmark_parser.add_argument(
+        "--mode",
+        choices=["artifact_chunking", "raw_pdf_extraction", "full_decision"],
+        default="artifact_chunking",
+        help="Benchmark lane to run: converted-artifact chunking, raw-PDF extraction, or both",
+    )
+    benchmark_parser.add_argument(
+        "--candidate-set",
+        choices=["control", "unstructured", "hybrid", "all"],
+        default="all",
+        help="Predefined candidate bundle to run when --candidates is not provided",
+    )
+    benchmark_parser.add_argument(
+        "--candidates",
+        default="",
+        help=(
+            "Optional comma-separated candidate ids to run. If omitted, --candidate-set is used. "
+            f"Core defaults are {', '.join(DEFAULT_CORE_CANDIDATES)}"
+        ),
+    )
+    benchmark_parser.add_argument(
+        "--difficult-subset-size",
+        type=int,
+        help="Optional size of the difficult raw-PDF subset before splitting into smoke/tuning/holdout",
+    )
+    benchmark_parser.add_argument(
+        "--include-optional",
+        action="store_true",
+        help=f"Include optional candidates: {', '.join(OPTIONAL_CANDIDATES)}",
+    )
+    benchmark_parser.add_argument(
+        "--doc-ids",
+        help="Optional comma-separated list of exact CAS document ids to benchmark",
+    )
+    benchmark_parser.add_argument(
+        "--skip-pdf-info",
+        action="store_true",
+        help="Skip pdfinfo page-count profiling during inventory generation",
+    )
+    benchmark_parser.set_defaults(func=cmd_benchmark_cas)
+
+    benchmark_biblio_parser = subparsers.add_parser(
+        "benchmark-biblio",
+        help="Benchmark Biblio UNAM extraction, chunking, deduplication, and classification strategies",
+    )
+    benchmark_biblio_parser.add_argument(
+        "--output-dir",
+        default="/tmp/biblio_chunk_benchmark",
+        help="Directory where benchmark artifacts will be written",
+    )
+    benchmark_biblio_parser.add_argument(
+        "--data-root",
+        default=os.environ.get("SCRAPER_MOUNTED_DATA_ROOT", "/app/mounted_data"),
+        help="Mounted corpus root containing books/<book_id>",
+    )
+    benchmark_biblio_parser.add_argument(
+        "--smoke-size",
+        type=int,
+        default=60,
+        help="Number of families in the smoke split",
+    )
+    benchmark_biblio_parser.add_argument(
+        "--tuning-size",
+        type=int,
+        default=140,
+        help="Number of families in the tuning split",
+    )
+    benchmark_biblio_parser.add_argument(
+        "--holdout-size",
+        type=int,
+        default=60,
+        help="Number of families in the holdout split",
+    )
+    benchmark_biblio_parser.add_argument(
+        "--seed",
+        type=int,
+        default=20260412,
+        help="Random seed for stratified sampling",
+    )
+    benchmark_biblio_parser.add_argument(
+        "--candidates",
+        default=",".join(BIBLIO_DEFAULT_CORE_CANDIDATES),
+        help=(
+            "Comma-separated chunking candidate ids to run. Core defaults are "
+            f"{', '.join(BIBLIO_DEFAULT_CORE_CANDIDATES)}"
+        ),
+    )
+    benchmark_biblio_parser.add_argument(
+        "--classifiers",
+        default=",".join(BIBLIO_DEFAULT_CLASSIFIERS),
+        help=(
+            "Comma-separated classifier ids to run. Defaults are "
+            f"{', '.join(BIBLIO_DEFAULT_CLASSIFIERS)}"
+        ),
+    )
+    benchmark_biblio_parser.add_argument(
+        "--include-optional",
+        action="store_true",
+        help=(
+            "Include optional chunking/classifier candidates: "
+            f"{', '.join(BIBLIO_OPTIONAL_CANDIDATES + BIBLIO_OPTIONAL_CLASSIFIERS)}"
+        ),
+    )
+    benchmark_biblio_parser.add_argument(
+        "--family-ids",
+        help="Optional comma-separated list of exact Biblio family/book ids to benchmark",
+    )
+    benchmark_biblio_parser.add_argument(
+        "--skip-pdf-info",
+        action="store_true",
+        help="Skip pdfinfo profiling during inventory generation",
+    )
+    benchmark_biblio_parser.set_defaults(func=cmd_benchmark_biblio)
 
     args = parser.parse_args()
 

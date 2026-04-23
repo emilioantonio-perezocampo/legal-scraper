@@ -13,8 +13,8 @@
     }
 
     # Inventory Dashboard (metadata + operational summary)
-    handle_path /inventory/* {
-        reverse_proxy legal-inventory:8050
+    handle /inventory/* {
+        reverse_proxy 172.22.0.7:8050
     }
     handle /inventory {
         redir /inventory/ permanent

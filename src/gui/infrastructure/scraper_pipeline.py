@@ -25,6 +25,8 @@ from temporalio.exceptions import ApplicationError
 
 logger = logging.getLogger(__name__)
 
+MOUNTED_BACKFILL_DRAIN_DEFAULT_SOURCES = {"scjn", "bjv", "orden", "cas", "dof"}
+
 
 # =============================================================================
 # Data Classes
@@ -49,6 +51,7 @@ class ScraperJobConfig:
     end_date: Optional[str] = None  # DOF
     section: Optional[str] = None  # DOF
     output_directory: Optional[str] = None
+    trigger_mounted_backfill_drain: Optional[bool] = None
     # n8n integration
     callback_url: Optional[str] = None  # n8n webhook URL for completion notification
 
@@ -216,7 +219,12 @@ async def poll_scraper_status(source: str, job_id: str) -> dict:
 
 
 @activity.defn
-async def trigger_embedding_workflow(job_id: str, source: str, document_count: int) -> Optional[str]:
+async def trigger_embedding_workflow(
+    job_id: str,
+    source: str,
+    document_count: int,
+    document_ids: Optional[list[str]] = None,
+) -> Optional[str]:
     """
     Trigger the embedding workflow for completed documents.
 
@@ -224,10 +232,22 @@ async def trigger_embedding_workflow(job_id: str, source: str, document_count: i
         job_id: Scraper job ID
         source: Source type
         document_count: Number of documents to embed
+        document_ids: Exact Supabase document UUIDs for this crawl, if known
 
     Returns:
         Embedding workflow run ID, or None if skipped
     """
+    document_ids = list(dict.fromkeys(document_ids or []))
+    if not document_ids:
+        if document_count == 0:
+            activity.logger.info("No documents to embed, skipping")
+        else:
+            activity.logger.warning(
+                "Embedding trigger skipped because no exact document IDs were provided; "
+                "refusing source-wide indexing."
+            )
+        return None
+
     if document_count == 0:
         activity.logger.info("No documents to embed, skipping")
         return None
@@ -240,6 +260,7 @@ async def trigger_embedding_workflow(job_id: str, source: str, document_count: i
         job_id=job_id,
         source_type=source,
         document_count=document_count,
+        document_ids=document_ids,
     )
 
     if run_id:
@@ -248,6 +269,31 @@ async def trigger_embedding_workflow(job_id: str, source: str, document_count: i
         activity.logger.warning("Failed to start embedding workflow")
 
     return run_id
+
+
+@activity.defn
+async def trigger_mounted_backfill_drain(
+    source: str,
+    limit: int = 5000,
+    bootstrap_missing_documents: bool = True,
+    data_root: Optional[str] = None,
+    max_passes: Optional[int] = None,
+    sleep_between_passes: float = 0.0,
+) -> Optional[str]:
+    """Trigger the durable mounted-data drain that registers and hydrates source files."""
+    from src.gui.infrastructure.temporal_client import get_temporal_client
+
+    client = get_temporal_client()
+    return await client.trigger_mounted_backfill_workflow(
+        source=source,
+        limit=limit,
+        include_existing_storage=False,
+        bootstrap_missing_documents=bootstrap_missing_documents,
+        trigger_embedding=True,
+        data_root=data_root,
+        max_passes=max_passes,
+        sleep_between_passes=sleep_between_passes,
+    )
 
 
 @activity.defn
@@ -391,6 +437,7 @@ class ScraperPipelineWorkflow:
 
         # Step 3: Trigger embedding if successful
         embedding_workflow_id = None
+        mounted_backfill_workflow_id = None
         if final_status.get("status") == "completed" and final_status.get("downloaded_count", 0) > 0:
             embedding_workflow_id = await workflow.execute_activity(
                 trigger_embedding_workflow,
@@ -401,6 +448,29 @@ class ScraperPipelineWorkflow:
                     maximum_attempts=3,
                 ),
             )
+            trigger_mounted_backfill_drain_enabled = bool(
+                config.get(
+                    "trigger_mounted_backfill_drain",
+                    source in MOUNTED_BACKFILL_DRAIN_DEFAULT_SOURCES,
+                )
+            )
+            if trigger_mounted_backfill_drain_enabled:
+                mounted_backfill_workflow_id = await workflow.execute_activity(
+                    trigger_mounted_backfill_drain,
+                    args=[
+                        source,
+                        int(config.get("mounted_backfill_limit", 5000) or 5000),
+                        bool(config.get("mounted_backfill_bootstrap_missing_documents", True)),
+                        config.get("mounted_data_root"),
+                        config.get("mounted_backfill_max_passes"),
+                        float(config.get("mounted_backfill_sleep_between_passes", 0.0) or 0.0),
+                    ],
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(
+                        initial_interval=timedelta(seconds=5),
+                        maximum_attempts=3,
+                    ),
+                )
 
         # Return final result
         result = {
@@ -410,6 +480,7 @@ class ScraperPipelineWorkflow:
             "downloaded_count": final_status.get("downloaded_count", 0),
             "error_count": final_status.get("error_count", 0),
             "embedding_workflow_id": embedding_workflow_id,
+            "mounted_backfill_workflow_id": mounted_backfill_workflow_id,
         }
 
         # Step 4: Send n8n callback if configured

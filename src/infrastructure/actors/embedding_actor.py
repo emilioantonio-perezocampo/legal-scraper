@@ -1,3 +1,17 @@
+# ═══════════════════════════════════════════════════════════════════════
+# FROZEN — 2026-04-08
+# This module is NOT called by any active production path (systemd timers,
+# Temporal workers, or Edge Functions). The active chunking/conversion
+# pipeline uses legal-corpus-tools (shared package) and legalconnect-infra
+# Edge Functions (unified-chunker.ts).
+#
+# Do not add features here. If you need chunking logic, use:
+#   - legal_corpus_tools.canonical_schema (Python, batch conversion)
+#   - unified-chunker.ts (TypeScript, Edge Functions)
+#
+# This file will be retired after 30 days if no active caller emerges.
+# ═══════════════════════════════════════════════════════════════════════
+
 """
 Embedding Actor
 
@@ -95,6 +109,14 @@ class EmbeddingActor(BaseActor):
         elif isinstance(message, tuple) and len(message) >= 2:
             if message[0] == "GET_EMBEDDINGS":
                 return self._embeddings.get(message[1], [])
+            elif message[0] == "CLEAR_EMBEDDINGS":
+                # Release embeddings for a specific document to free memory
+                self._embeddings.pop(message[1], None)
+                return True
+            elif message[0] == "CLEAR_ALL_EMBEDDINGS":
+                # Release all stored embeddings
+                self._embeddings.clear()
+                return True
 
         return None
 

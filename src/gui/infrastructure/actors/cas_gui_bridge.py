@@ -241,7 +241,6 @@ class CASGuiBridgeActor(CASBaseActor):
                                     "external_id": case_num,
                                     "title": title,
                                     "publication_date": f"{year}-01-01" if year else None,
-                                    "embedding_status": "pending",
                                 }, on_conflict="source_type,external_id").execute()
                                 total_saved += 1
                             except Exception:

@@ -30,9 +30,15 @@ from src.gui.infrastructure.scraper_pipeline import (
     start_scraper_job,
     poll_scraper_status,
     trigger_embedding_workflow,
+    trigger_mounted_backfill_drain,
     send_n8n_callback,
 )
 from src.gui.infrastructure.crawl4ai_workflow import Crawl4AIExtractionWorkflow
+from src.gui.infrastructure.mounted_backfill_workflow import (
+    MountedBackfillDrainWorkflow,
+    run_mounted_backfill_drain,
+    trigger_mounted_backfill_drain_workflow,
+)
 from src.gui.infrastructure.crawl4ai_activities import (
     extract_documents_crawl4ai,
     extract_scjn_documents,
@@ -53,6 +59,19 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Supabase/HTTP client INFO logs can flood stdout during large backfills and
+# starve useful workflow progress signals. Keep worker output focused on
+# pipeline-level events and warnings/errors.
+for noisy_logger in (
+    "httpx",
+    "httpcore",
+    "postgrest",
+    "storage3",
+    "realtime",
+    "supabase",
+):
+    logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 
 async def run_worker():
@@ -76,6 +95,7 @@ async def run_worker():
         workflows=[
             ScraperPipelineWorkflow,      # Original API-based workflow
             Crawl4AIExtractionWorkflow,   # New Crawl4AI direct workflow
+            MountedBackfillDrainWorkflow, # Durable mounted-data hydration drain
             ScraperDocumentWorkflow,      # Document embedding workflow
         ],
         activities=[
@@ -83,6 +103,7 @@ async def run_worker():
             start_scraper_job,
             poll_scraper_status,
             trigger_embedding_workflow,
+            trigger_mounted_backfill_drain,
             send_n8n_callback,
             # New Crawl4AI activities
             extract_documents_crawl4ai,
@@ -92,6 +113,8 @@ async def run_worker():
             extract_cas_documents,
             persist_documents_to_supabase,
             download_documents_pdfs,
+            run_mounted_backfill_drain,
+            trigger_mounted_backfill_drain_workflow,
             # Document embedding activities
             fetch_documents_for_embedding,
             generate_and_store_embeddings,

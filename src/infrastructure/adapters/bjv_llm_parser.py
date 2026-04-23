@@ -82,6 +82,8 @@ class ExtractedBJVSearchResults(BaseModel):
 class BJVSearchResult:
     """Search result from BJV with domain-compatible fields."""
 
+    BASE_URL = "https://biblio.juridicas.unam.mx"
+
     def __init__(
         self,
         libro_id: IdentificadorLibro,
@@ -91,6 +93,8 @@ class BJVSearchResult:
         anio: Optional[int] = None,
         area: Optional[str] = None,
         fragmento: Optional[str] = None,
+        detail_url: Optional[str] = None,
+        url_pdf: Optional[str] = None,
     ):
         self.libro_id = libro_id
         self.titulo = titulo
@@ -99,10 +103,18 @@ class BJVSearchResult:
         self.anio = anio
         self.area = area
         self.fragmento = fragmento
+        self.detail_url = self._normalize_url(detail_url)
+        self.url_pdf = self._normalize_url(url_pdf)
+
+    def _normalize_url(self, url: Optional[str]) -> Optional[str]:
+        if not url:
+            return None
+        return urllib.parse.urljoin(f"{self.BASE_URL}/", url)
 
     @property
     def url(self) -> str:
-        return self.libro_id.url
+        """Prefer the extracted detail URL when available."""
+        return self.detail_url or self.libro_id.url
 
 
 # --- Main Parser Class ---
@@ -268,6 +280,7 @@ Extract every unique book you can find on the page.
                 for match in book_pattern.finditer(result.html):
                     book_id = match.group(1)
                     slug = match.group(2)
+                    detail_url = match.group(0)
 
                     if book_id in seen_ids:
                         continue
@@ -285,6 +298,7 @@ Extract every unique book you can find on the page.
                         anio=None,
                         area=None,
                         fragmento=None,
+                        detail_url=detail_url,
                     ))
 
                 logger.info(f"BJV HTML extraction: Found {len(search_results)} books")
@@ -415,4 +429,5 @@ Extract every unique book you can find on the page.
             anio=book.year,
             area=book.area,
             fragmento=book.snippet,
+            detail_url=book.detail_url,
         )

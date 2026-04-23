@@ -1,3 +1,17 @@
+# ═══════════════════════════════════════════════════════════════════════
+# FROZEN — 2026-04-08
+# This module is NOT called by any active production path (systemd timers,
+# Temporal workers, or Edge Functions). The active chunking/conversion
+# pipeline uses legal-corpus-tools (shared package) and legalconnect-infra
+# Edge Functions (unified-chunker.ts).
+#
+# Do not add features here. If you need chunking logic, use:
+#   - legal_corpus_tools.canonical_schema (Python, batch conversion)
+#   - unified-chunker.ts (TypeScript, Edge Functions)
+#
+# This file will be retired after 30 days if no active caller emerges.
+# ═══════════════════════════════════════════════════════════════════════
+
 """
 BJV text chunker.
 
@@ -216,9 +230,14 @@ class BJVTextChunker:
         return [s for s in segments if s.strip()]
 
     def _split_large_segment(self, segment: str) -> List[str]:
-        """Split a segment that exceeds max tokens."""
+        """Split a segment that exceeds max tokens.
+
+        Uses incremental token tracking to avoid re-tokenizing
+        the accumulated 'current' string on every iteration.
+        """
         chunks = []
         current = ""
+        current_tokens = 0
 
         # Try secondary separators
         parts = self._split_by_separators(segment, self._config.separadores_secundarios)
@@ -231,17 +250,20 @@ class BJVTextChunker:
                 if current.strip():
                     chunks.append(current.strip())
                     current = ""
+                    current_tokens = 0
 
                 # Hard split by words
                 word_chunks = self._hard_split(part)
                 chunks.extend(word_chunks)
-            elif self._count_tokens(current + part) > self._config.max_tokens:
+            elif current_tokens + part_tokens > self._config.max_tokens:
                 if current.strip():
                     chunks.append(current.strip())
                 overlap = self._get_overlap_text(current)
                 current = overlap + part
+                current_tokens = self._count_tokens(current)
             else:
                 current += part
+                current_tokens += part_tokens
 
         if current.strip():
             chunks.append(current.strip())
@@ -249,25 +271,55 @@ class BJVTextChunker:
         return chunks
 
     def _hard_split(self, text: str) -> List[str]:
-        """Hard split text by words when all else fails."""
+        """Hard split text by words when all else fails.
+
+        Uses incremental token counting to avoid O(n²) re-tokenization.
+        Each word's token count is computed once, then accumulated.
+        """
         words = text.split()
         chunks = []
-        current = ""
+        current_words: List[str] = []
+        current_tokens = 0
 
         for word in words:
-            test_chunk = current + " " + word if current else word
-            if self._count_tokens(test_chunk) > self._config.max_tokens:
-                if current.strip():
-                    chunks.append(current.strip())
-                overlap = self._get_overlap_text(current)
-                current = overlap + word
+            word_tokens = self._count_tokens(word)
+            # +1 for the space separator between words
+            separator_tokens = 1 if current_words else 0
+            if current_tokens + separator_tokens + word_tokens > self._config.max_tokens:
+                if current_words:
+                    chunks.append(" ".join(current_words))
+                overlap_words, overlap_tokens = self._get_overlap_words(current_words)
+                current_words = overlap_words + [word]
+                current_tokens = overlap_tokens + word_tokens
             else:
-                current = test_chunk
+                current_words.append(word)
+                current_tokens += separator_tokens + word_tokens
 
-        if current.strip():
-            chunks.append(current.strip())
+        if current_words:
+            chunks.append(" ".join(current_words))
 
         return chunks
+
+    def _get_overlap_words(self, words: List[str]) -> tuple:
+        """Get overlap words and their token count from end of chunk.
+
+        Returns (overlap_words_list, total_overlap_tokens) to avoid
+        re-tokenizing the overlap text when prepending to next chunk.
+        """
+        if not words or self._config.overlap_tokens <= 0:
+            return [], 0
+
+        overlap_words: List[str] = []
+        token_count = 0
+
+        for word in reversed(words):
+            word_tokens = self._count_tokens(word)
+            if token_count + word_tokens > self._config.overlap_tokens:
+                break
+            overlap_words.insert(0, word)
+            token_count += word_tokens
+
+        return overlap_words, token_count
 
     def _get_overlap_text(self, text: str) -> str:
         """Get overlap text from end of chunk."""
@@ -278,15 +330,5 @@ class BJVTextChunker:
         if not words:
             return ""
 
-        # Take words from end up to overlap token count
-        overlap_words = []
-        token_count = 0
-
-        for word in reversed(words):
-            word_tokens = self._count_tokens(word)
-            if token_count + word_tokens > self._config.overlap_tokens:
-                break
-            overlap_words.insert(0, word)
-            token_count += word_tokens
-
+        overlap_words, _ = self._get_overlap_words(words)
         return " ".join(overlap_words) + " " if overlap_words else ""

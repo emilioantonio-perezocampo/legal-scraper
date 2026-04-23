@@ -383,7 +383,6 @@ class BJVGuiBridgeActor(BaseActor):
                                             "source_type": "bjv",
                                             "external_id": str(ext_id),
                                             "title": title[:500],
-                                            "embedding_status": "pending",
                                         }, on_conflict="source_type,external_id").execute()
                                         total_saved += 1
                                     except Exception:

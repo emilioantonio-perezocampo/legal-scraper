@@ -30,12 +30,36 @@ with workflow.unsafe.imports_passed_through():
         persist_documents_to_supabase,
         download_documents_pdfs,
     )
+    from src.gui.infrastructure.mounted_backfill_workflow import (
+        trigger_mounted_backfill_drain_workflow,
+    )
     from src.gui.infrastructure.scraper_pipeline import (
         trigger_embedding_workflow,
         send_n8n_callback,
     )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_embedding_document_ids(
+    trigger_embedding: bool,
+    document_count: int,
+    persistence_result: Optional[dict],
+) -> tuple[list[str], list[str]]:
+    """Return exact persisted document IDs for embedding, or a workflow warning."""
+    if not trigger_embedding or document_count <= 0:
+        return [], []
+
+    persisted_document_ids = list(
+        dict.fromkeys((persistence_result or {}).get("document_ids", []) or [])
+    )
+    if persisted_document_ids:
+        return persisted_document_ids, []
+
+    return [], [
+        "Embedding requested but persistence returned no document IDs; "
+        "skipping trigger to avoid source-wide indexing."
+    ]
 
 
 @dataclass
@@ -71,6 +95,7 @@ class Crawl4AIJobConfig:
     # Post-processing
     persist_to_db: bool = True
     trigger_embedding: bool = True
+    trigger_mounted_backfill_drain: bool = False
     callback_url: Optional[str] = None
 
 
@@ -104,6 +129,20 @@ class Crawl4AIExtractionWorkflow:
             Result dict with extraction stats
         """
         source = config.get("source", "unknown")
+        trigger_embedding = config.get("trigger_embedding", True)
+        download_pdfs = config.get("download_pdfs", False)
+        upload_to_storage = config.get("upload_to_storage", False)
+
+        if trigger_embedding:
+            if not download_pdfs:
+                workflow.logger.info("Enabling download_pdfs because embedding requires source files")
+                download_pdfs = True
+            if not upload_to_storage:
+                workflow.logger.info(
+                    "Enabling upload_to_storage because embedding requires durable file access"
+                )
+                upload_to_storage = True
+
         workflow.logger.info(f"Starting Crawl4AI extraction for {source}")
 
         # Step 1: Extract documents using Crawl4AI
@@ -138,7 +177,7 @@ class Crawl4AIExtractionWorkflow:
 
         # Step 2: Download PDF/Word files (if enabled)
         download_result = None
-        if config.get("download_pdfs", False) and document_count > 0:
+        if download_pdfs and document_count > 0:
             workflow.logger.info(f"Downloading PDFs for {document_count} documents")
             download_result = await workflow.execute_activity(
                 download_documents_pdfs,
@@ -146,7 +185,7 @@ class Crawl4AIExtractionWorkflow:
                     documents,
                     source,
                     config.get("output_directory", f"{source}_data"),
-                    config.get("upload_to_storage", False),
+                    upload_to_storage,
                 ],
                 start_to_close_timeout=timedelta(minutes=60),  # Longer timeout for downloads
                 retry_policy=RetryPolicy(
@@ -159,6 +198,17 @@ class Crawl4AIExtractionWorkflow:
                 f"Download result: {download_result.get('downloaded_count', 0)} downloaded, "
                 f"{download_result.get('failed_count', 0)} failed"
             )
+            downloaded_documents = download_result.get("downloaded_documents", [])
+            if downloaded_documents:
+                by_external_id = {
+                    item.get("external_id"): item
+                    for item in downloaded_documents
+                    if item.get("external_id")
+                }
+                documents = [
+                    {**doc, **by_external_id.get(doc.get("external_id"), {})}
+                    for doc in documents
+                ]
 
         # Step 3: Persist to Supabase (if enabled)
         persistence_result = None
@@ -177,14 +227,34 @@ class Crawl4AIExtractionWorkflow:
 
         # Step 4: Trigger embedding workflow (if enabled)
         embedding_workflow_id = None
-        if config.get("trigger_embedding", True) and document_count > 0:
+        mounted_backfill_workflow_id = None
+        workflow_errors = list(extraction_result.get("errors", []))
+        if persistence_result and not persistence_result.get("success", True):
+            workflow_errors.extend(persistence_result.get("errors", [])[:10])
+            if not persistence_result.get("errors") and persistence_result.get("error_count", 0):
+                workflow_errors.append(
+                    f"Persistence failed for {persistence_result.get('error_count', 0)} documents"
+                )
+
+        persisted_document_ids, embedding_warnings = _resolve_embedding_document_ids(
+            trigger_embedding,
+            document_count,
+            persistence_result,
+        )
+        if embedding_warnings:
+            workflow_errors.extend(embedding_warnings)
+            for warning in embedding_warnings:
+                workflow.logger.warning(warning)
+
+        if trigger_embedding and persisted_document_ids:
             workflow.logger.info("Triggering embedding workflow")
             embedding_workflow_id = await workflow.execute_activity(
                 trigger_embedding_workflow,
                 args=[
                     f"crawl4ai-{source}-{workflow.info().workflow_id}",
                     source,
-                    document_count,
+                    len(persisted_document_ids),
+                    persisted_document_ids,
                 ],
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=RetryPolicy(
@@ -195,16 +265,47 @@ class Crawl4AIExtractionWorkflow:
             if embedding_workflow_id:
                 workflow.logger.info(f"Started embedding workflow: {embedding_workflow_id}")
 
+        trigger_mounted_backfill_drain = bool(
+            config.get(
+                "trigger_mounted_backfill_drain",
+                source in {"scjn", "bjv", "orden", "cas", "dof"},
+            )
+        )
+        if trigger_mounted_backfill_drain:
+            workflow.logger.info("Triggering durable mounted backfill drain for %s", source)
+            mounted_backfill_workflow_id = await workflow.execute_activity(
+                trigger_mounted_backfill_drain_workflow,
+                args=[{
+                    "source": source,
+                    "limit": config.get("mounted_backfill_limit", 5000),
+                    "include_existing_storage": False,
+                    "bootstrap_missing_documents": config.get(
+                        "mounted_backfill_bootstrap_missing_documents",
+                        True,
+                    ),
+                    "trigger_embedding": True,
+                    "data_root": config.get("mounted_data_root"),
+                    "max_passes": config.get("mounted_backfill_max_passes"),
+                    "sleep_between_passes": config.get("mounted_backfill_sleep_between_passes", 0.0),
+                }],
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=5),
+                    maximum_attempts=3,
+                ),
+            )
+
         # Build result
         result = {
             "source": source,
-            "success": True,
+            "success": len(workflow_errors) == 0,
             "document_count": document_count,
             "output_directory": extraction_result.get("output_directory"),
-            "errors": extraction_result.get("errors", []),
+            "errors": workflow_errors[:10],
             "download": download_result,
             "persistence": persistence_result,
             "embedding_workflow_id": embedding_workflow_id,
+            "mounted_backfill_workflow_id": mounted_backfill_workflow_id,
         }
 
         # Step 5: Send n8n callback (if configured)

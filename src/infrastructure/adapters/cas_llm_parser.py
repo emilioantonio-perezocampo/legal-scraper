@@ -5,6 +5,8 @@ Extracts arbitration awards from the Court of Arbitration for Sport (CAS/TAS)
 jurisprudence database using LLM-powered semantic extraction.
 """
 import logging
+import re
+import urllib.parse
 from datetime import date
 from typing import List, Optional
 
@@ -318,12 +320,14 @@ If a field is not visible or cannot be determined, use null.
                                 const sport = cells[6]?.innerText?.trim() || '';
                                 const matter = cells[7]?.innerText?.trim() || '';
                                 const decisionDate = cells[8]?.innerText?.trim() || '';
+                                const link = row.querySelector('a[href]');
+                                const href = link ? (link.getAttribute('href') || '') : '';
 
                                 if (year && /^\\d{4}$/.test(year) && caseNum) {
                                     results.push({
                                         caseNumber: `CAS ${year}/${proc || 'A'}/${caseNum}`,
                                         year, proc: proc || 'A', num: caseNum,
-                                        appellant, respondent, sport, matter, decisionDate
+                                        appellant, respondent, sport, matter, decisionDate, href
                                     });
                                 }
                             }
@@ -350,6 +354,9 @@ If a field is not visible or cannot be determined, use null.
                     appellant = case.get("appellant", "")
                     respondent = case.get("respondent", "")
                     parties = f"{appellant} v. {respondent}" if appellant and respondent else None
+                    href = case.get("href", "")
+                    if href:
+                        href = urllib.parse.urljoin(f"{self.BASE_URL}/", href)
 
                     fecha = None
                     date_str = case.get("decisionDate", "")
@@ -370,11 +377,35 @@ If a field is not visible or cannot be determined, use null.
                         categoria_deporte=self._parse_sport(case.get("sport", "")),
                         tipo_procedimiento=self._parse_procedure_type(case.get("proc", "")),
                         partes=parties,
-                        resumen=None,
-                        url=None,
+                        resumen=case.get("matter") or None,
+                        url=URLLaudo(valor=href) if href else None,
                     ))
 
-                # If no table results, try LLM extraction on rendered HTML
+                if not search_results and links_data:
+                    for item in links_data:
+                        combined = f"{item.get('text', '')} {item.get('href', '')}"
+                        match = re.search(r"(?:CAS|TAS)\s*\d{4}\s*/\s*\w\s*/\s*\d+", combined, re.IGNORECASE)
+                        if not match:
+                            continue
+                        case_number = re.sub(r"\s+", " ", match.group(0).upper()).replace(" /", "/").replace("/ ", "/")
+                        if case_number in seen_cases:
+                            continue
+                        href = urllib.parse.urljoin(f"{self.BASE_URL}/", item.get("href", ""))
+                        search_results.append(
+                            CASSearchResult(
+                                numero_caso=NumeroCaso(valor=case_number),
+                                titulo=item.get("text") or case_number,
+                                fecha=None,
+                                categoria_deporte=self._parse_sport(item.get("text", "")),
+                                tipo_procedimiento=None,
+                                partes=None,
+                                resumen=None,
+                                url=URLLaudo(valor=href) if href else None,
+                            )
+                        )
+                        seen_cases.add(case_number)
+
+                # If no row/link results, try LLM extraction on rendered HTML
                 if not search_results:
                     html = await page.content()
                     logger.info("No table cases found, falling back to LLM extraction on rendered HTML")

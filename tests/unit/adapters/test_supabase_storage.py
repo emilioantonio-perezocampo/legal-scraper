@@ -364,3 +364,46 @@ class TestSupabaseStorageAdapterPathGeneration:
         hash_prefix = parts[1]  # After source_type
         assert len(hash_prefix) == 2
         assert all(c in "0123456789abcdef" for c in hash_prefix)
+
+    def test_build_path_uses_html_extension_for_html_content(self, mock_supabase_client):
+        """HTML source snapshots should keep a deterministic .html storage path."""
+        client, storage, bucket = mock_supabase_client
+
+        adapter = SupabaseStorageAdapter(client=client)
+        path = adapter.build_path(
+            source_type="bjv",
+            doc_id="doc-html",
+            content_type="text/html",
+        )
+
+        assert path.startswith("bjv/")
+        assert path.endswith("doc-html.html")
+
+    def test_build_path_uses_txt_extension_for_plain_text_content(self, mock_supabase_client):
+        """Plain-text converted sources should keep a deterministic .txt storage path."""
+        client, storage, bucket = mock_supabase_client
+
+        adapter = SupabaseStorageAdapter(client=client)
+        path = adapter.build_path(
+            source_type="orden",
+            doc_id="wo45",
+            content_type="text/plain",
+        )
+
+        assert path.startswith("orden/")
+        assert path.endswith("wo45.txt")
+
+    def test_build_path_respects_explicit_file_extension(self, mock_supabase_client):
+        """Explicit file extensions should override storage MIME defaults."""
+        client, storage, bucket = mock_supabase_client
+
+        adapter = SupabaseStorageAdapter(client=client)
+        path = adapter.build_path(
+            source_type="dof",
+            doc_id="5781163",
+            content_type="application/octet-stream",
+            file_extension=".doc",
+        )
+
+        assert path.startswith("dof/")
+        assert path.endswith("5781163.doc")
